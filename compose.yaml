@@ -1,0 +1,24 @@
+name: shelf
+
+services:
+  postgres:
+    image: postgres:18-bookworm
+    restart: unless-stopped
+    shm_size: 128mb
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-shelf}
+      POSTGRES_USER: ${POSTGRES_USER:-shelf}
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  postgres_data:
