@@ -33,12 +33,17 @@ Lancer ensuite l'API :
 ```sh
 dotnet restore apps/backend/Shelf.slnx
 dotnet build apps/backend/Shelf.slnx --no-restore
+export ConnectionStrings__Shelf='Host=localhost;Database=shelf;Username=shelf'
+export Authentication__ClientOrigin='http://localhost:3000'
+dotnet run --project apps/backend/Shelf.Api --no-launch-profile -- migrate
+dotnet run --project apps/backend/Shelf.Api --no-launch-profile -- admin create owner owner@example.test
 dotnet run --project apps/backend/Shelf.Api --launch-profile http
 ```
 
 L'API est accessible sur http://localhost:5050.
 Vérification : `curl --fail http://localhost:5050/health`.
 
-Le backend fournit uniquement un endpoint de santé pour démarrer. Le stockage,
-l'authentification et les applications clientes restent à implémenter.
+Le backend fournit la santé, l’authentification web/mobile et la gestion des
+comptes sur invitation. Voir [le contrat et les commandes](docs/authentication.md).
+Le stockage et les applications clientes restent à implémenter.
 Ne pas ajouter de fichiers personnels ni de secrets au dépôt.
