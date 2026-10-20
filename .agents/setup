@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Idempotent setup for a fresh Amp orb: .NET SDK 10 + PostgreSQL 15.
+# Long-lived processes are NOT started here (they are stopped before snapshotting);
+# .agents/resume starts Postgres after activation and on every wake.
+
+SUDO=""
+[ "$(id -u)" -eq 0 ] || SUDO="sudo"
+
+step() { echo "[shelf-setup] $1"; }
+
+# --- System packages ---------------------------------------------------------
+if ! dpkg -s postgresql >/dev/null 2>&1; then
+  step "installing postgresql (apt)"
+  $SUDO apt-get update -qq
+  $SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql
+else
+  step "postgresql already installed"
+fi
+
+PG_VERSION="$($SUDO ls /etc/postgresql | head -n1)"
+PG_CONF="/etc/postgresql/$PG_VERSION/main"
+
+# --- Postgres tuning and auth ------------------------------------------------
+# Trust auth for local TCP so integration tests (Host=localhost;Username=shelf)
+# and the dev server connect without a password.
+if ! $SUDO grep -q '^host\s.*\strust$' "$PG_CONF/pg_hba.conf"; then
+  step "configuring pg_hba trust auth"
+  $SUDO sed -i 's/^\(host\s.*\)\(scram-sha-256\|md5\)\s*$/\1trust/' "$PG_CONF/pg_hba.conf"
+fi
+
+# Speed over durability: this is a disposable sandbox database.
+if ! $SUDO grep -q 'shelf-orb-tuning' "$PG_CONF/postgresql.conf"; then
+  step "tuning postgres for sandbox speed"
+  cat | $SUDO tee -a "$PG_CONF/postgresql.conf" >/dev/null <<'EOF'
+
+# shelf-orb-tuning (disposable sandbox: speed over durability)
+fsync = off
+synchronous_commit = off
+full_page_writes = off
+EOF
+fi
+
+# --- .NET SDK (pinned by global.json: 10.0) ----------------------------------
+DOTNET_ROOT="$HOME/.dotnet"
+if ! [ -x "$DOTNET_ROOT/dotnet" ] || ! "$DOTNET_ROOT/dotnet" --list-sdks 2>/dev/null | grep -q '^10\.'; then
+  step "installing .NET SDK 10"
+  curl -sSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
+  bash /tmp/dotnet-install.sh --channel 10.0 --install-dir "$DOTNET_ROOT" --no-path
+else
+  step ".NET SDK 10 already installed"
+fi
+
+# Make dotnet visible to login shells (Amp and supervised services).
+PROFILE_MARKER="# shelf .NET SDK 10"
+if ! grep -Fqx "$PROFILE_MARKER" "$HOME/.bash_profile" 2>/dev/null; then
+  step "adding dotnet to ~/.bash_profile"
+  cat >> "$HOME/.bash_profile" <<EOF
+
+$PROFILE_MARKER
+export DOTNET_ROOT="$HOME/.dotnet"
+export DOTNET_CLI_TELEMETRY_OPTOUT=1
+export PATH="\$DOTNET_ROOT:\$PATH"
+EOF
+fi
+
+# --- Database role and database ----------------------------------------------
+step "ensuring role 'shelf' and database 'shelf'"
+if ! $SUDO -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='shelf'" | grep -q 1; then
+  $SUDO -u postgres psql -c "CREATE ROLE shelf WITH SUPERUSER LOGIN;"
+fi
+if ! $SUDO -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='shelf'" | grep -q 1; then
+  $SUDO -u postgres createdb --owner=shelf shelf
+fi
+
+# --- Warm dependency caches ---------------------------------------------------
+step "restoring NuGet packages"
+"$DOTNET_ROOT/dotnet" restore apps/backend/Shelf.Api.Tests >/dev/null
+
+step "done"

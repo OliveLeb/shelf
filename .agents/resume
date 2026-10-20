@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Fast, idempotent work after orb activation and on every wake (10s budget):
+# just make sure PostgreSQL is up.
+
+PG_VERSION="$(ls /etc/postgresql | head -n1)"
+if ! pg_isready -q -h 127.0.0.1 -p 5432; then
+  echo "[shelf-resume] starting PostgreSQL $PG_VERSION"
+  sudo pg_ctlcluster "$PG_VERSION" main start
+fi
