@@ -11,3 +11,11 @@ Les cinq labels de triage standards sont utilisés. Voir `docs/agents/triage-lab
 ### Domain docs
 
 La documentation de domaine suit un contexte unique à la racine. Voir `docs/agents/domain.md`.
+
+### Conventional commits
+
+Les messages de commit suivent Conventional Commits et sont rédigés en anglais. Voir `docs/agents/commits.md`.
+
+### Branches et PR brouillon
+
+Chaque issue travaillée a sa branche dédiée ; une PR brouillon est ouverte dès la création de la branche. Voir `docs/agents/issue-tracker.md`.
