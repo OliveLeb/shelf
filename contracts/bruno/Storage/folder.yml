@@ -1,0 +1,6 @@
+info:
+  name: Storage
+  type: folder
+
+request:
+  auth: inherit

@@ -1,0 +1,59 @@
+info:
+  name: Declare an upload
+  type: http
+  seq: 2
+  tags:
+    - Storage
+
+http:
+  method: POST
+  url: "{{baseUrl}}/uploads"
+  body:
+    type: json
+    data: |-
+      {
+        "name": "",
+        "size": "",
+        "contentType": ""
+      }
+  auth:
+    type: bearer
+    token: "{{token}}"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+examples:
+  - name: 201 Response
+    description: Created
+    request:
+      url: "{{baseUrl}}/uploads"
+      method: POST
+      body:
+        type: json
+        data: |-
+          {
+            "name": "",
+            "size": "",
+            "contentType": ""
+          }
+    response:
+      status: 201
+      statusText: Created
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "id": "",
+            "url": "",
+            "method": "",
+            "headers": {},
+            "expiresAt": ""
+          }
