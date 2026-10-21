@@ -139,18 +139,33 @@ public abstract class TestInstance : IAsyncLifetime
         Admin?.Dispose();
         Client?.Dispose();
         if (App is not null) await App.DisposeAsync();
-        if (S3 is not null)
+        try
         {
-            foreach (var item in (await S3.ListObjectsV2Async(new ListObjectsV2Request { BucketName = Bucket })).S3Objects ?? [])
-                await S3.DeleteObjectAsync(Bucket, item.Key);
-            await S3.DeleteBucketAsync(Bucket);
-            S3.Dispose();
+            if (S3 is not null) await DeleteBucket();
         }
-        NpgsqlConnection.ClearAllPools();
-        await using var connection = new NpgsqlConnection(adminConnection);
-        await connection.OpenAsync();
-        await using var command = new NpgsqlCommand($"DROP DATABASE IF EXISTS {databaseName} WITH (FORCE)", connection);
-        await command.ExecuteNonQueryAsync();
+        finally
+        {
+            NpgsqlConnection.ClearAllPools();
+            await using var connection = new NpgsqlConnection(adminConnection);
+            await connection.OpenAsync();
+            await using var command = new NpgsqlCommand($"DROP DATABASE IF EXISTS {databaseName} WITH (FORCE)", connection);
+            await command.ExecuteNonQueryAsync();
+        }
+    }
+    private async Task DeleteBucket()
+    {
+        using (S3)
+        {
+            var listing = new ListObjectsV2Request { BucketName = Bucket };
+            ListObjectsV2Response page;
+            do
+            {
+                page = await S3.ListObjectsV2Async(listing);
+                foreach (var item in page.S3Objects ?? []) await S3.DeleteObjectAsync(Bucket, item.Key);
+                listing.ContinuationToken = page.NextContinuationToken;
+            } while (page.IsTruncated == true);
+            await S3.DeleteBucketAsync(Bucket);
+        }
     }
 }
 

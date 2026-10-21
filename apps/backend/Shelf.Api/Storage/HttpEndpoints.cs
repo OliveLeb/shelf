@@ -22,10 +22,10 @@ public static class HttpEndpoints
             var clock = http.RequestServices.GetRequiredService<TimeProvider>();
             try
             {
-                // Authentication belongs to the account module; storage work runs in its own transaction, without the account lock.
-                var actor = await http.RequestServices.GetRequiredService<Database>().Execute(db => db.Authenticate(http.Request.Headers.Authorization, admin: false), clock, http.RequestAborted);
                 await using var connection = await http.RequestServices.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync(http.RequestAborted);
                 await using var transaction = await connection.BeginTransactionAsync(http.RequestAborted);
+                // Storage authenticates in its own transaction, without the account operations' advisory lock.
+                var actor = await new AuthTransaction(connection, transaction, clock, http.RequestAborted).Authenticate(http.Request.Headers.Authorization, admin: false);
                 http.Items[typeof(Account)] = actor.Account;
                 http.Items[typeof(StorageTransaction)] = new StorageTransaction(connection, transaction, store, clock, http.RequestAborted);
                 var result = await next(context);

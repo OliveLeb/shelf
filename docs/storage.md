@@ -62,6 +62,10 @@ Un fichier contient `id`, `name`, `size`, `contentType`, `addedAt` et
    l’objet existe et que sa taille égale la taille déclarée. Le fichier
    n’apparaît qu’après cette confirmation.
 
+Le nom doit être libre dans la destination, sans tenir compte de la casse : il
+est vérifié à la déclaration, puis de nouveau à la confirmation par une
+contrainte PostgreSQL, car un autre fichier a pu le prendre entre-temps.
+
 Le bucket doit autoriser le CORS de l’origine cliente pour les transferts depuis
 un navigateur.
 

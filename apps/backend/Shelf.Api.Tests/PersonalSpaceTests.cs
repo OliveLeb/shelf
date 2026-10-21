@@ -60,7 +60,7 @@ public sealed class PersonalSpaceTests : TestInstance
             Assert.DoesNotContain(secret, logs);
     }
     [Fact]
-    public async Task Confirmation_fails_until_the_object_exists_in_the_bucket_with_the_declared_size()
+    public async Task Confirmation_fails_until_the_file_is_transferred_with_the_declared_size()
     {
         var (_, member) = await User();
         var upload = await Declare(member, "video.mp4", Photo.Length, "video/mp4");
@@ -78,6 +78,25 @@ public sealed class PersonalSpaceTests : TestInstance
         Assert.Equal(HttpStatusCode.Created, (await Confirm(member, upload)).StatusCode);
         Assert.Single(await Root(member));
         Assert.Equal(HttpStatusCode.NotFound, (await Confirm(member, upload)).StatusCode);
+    }
+    [Fact]
+    public async Task Name_already_used_in_the_personal_space_ignoring_case_is_refused_at_declaration_and_confirmation()
+    {
+        var (_, member) = await User();
+        var first = await Declare(member, "Photo.JPG", Photo.Length);
+        var second = await Declare(member, "photo.jpg", Photo.Length);
+        await Upload(member, "PHOTO.jpg");
+        var declaration = await member.PostAsJsonAsync("/uploads", new { name = "photo.jpg", size = 1 });
+        Assert.Equal(HttpStatusCode.Conflict, declaration.StatusCode);
+        Assert.Equal("name_conflict", (await declaration.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString());
+        foreach (var upload in new[] { first, second })
+        {
+            Assert.Equal(HttpStatusCode.OK, (await Put(upload, Photo)).StatusCode);
+            var confirmation = await Confirm(member, upload);
+            Assert.Equal(HttpStatusCode.Conflict, confirmation.StatusCode);
+            Assert.Equal("name_conflict", (await confirmation.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString());
+        }
+        Assert.Equal("PHOTO.jpg", Assert.Single(await Root(member)).GetProperty("name").GetString());
     }
     [Theory]
     [InlineData("", 1L, null, "invalid_name")]

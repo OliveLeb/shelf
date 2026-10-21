@@ -8,7 +8,7 @@ public sealed class StorageTransaction(NpgsqlConnection connection, NpgsqlTransa
 {
     private const string FileColumns = "e.id, e.name, e.size, e.content_type, e.added_at, a.id, a.username FROM elements e JOIN spaces s ON s.id=e.space_id LEFT JOIN accounts a ON a.id=e.added_by";
     private static FileElement ReadFile(NpgsqlDataReader r) => new(r.GetGuid(0), r.GetString(1), r.GetInt64(2), r.GetString(3), r.GetFieldValue<DateTimeOffset>(4),
-        r.IsDBNull(5) ? null : new Author(r.GetGuid(5), r.GetString(6)));
+        r.IsDBNull(5) ? null : new AccountSummary(r.GetGuid(5), r.GetString(6)));
 
     public Task<List<FileElement>> PersonalRoot(Account account) => Query($"SELECT {FileColumns} WHERE s.owner_id=$1 ORDER BY e.name", ReadFile, account.Id);
 
@@ -18,6 +18,9 @@ public sealed class StorageTransaction(NpgsqlConnection connection, NpgsqlTransa
         if (input.Size is not >= 0) throw new StorageError(400, "invalid_size");
         var contentType = ContentType(input.ContentType);
         var space = (Guid)(await Scalar("SELECT id FROM spaces WHERE owner_id=$1", account.Id))!;
+        // Checked again by the unique index at confirmation, since another file may take the name meanwhile.
+        if (await Scalar("SELECT 1 FROM elements WHERE space_id=$1 AND upper(name)=upper($2)", space, name) is not null)
+            throw new StorageError(409, "name_conflict");
         var id = Guid.NewGuid();
         var key = ObjectStore.NewKey();
         await Run("INSERT INTO uploads VALUES ($1,$2,$3,$4,$5,$6,$7,$8)", id, space, account.Id, name, input.Size.Value, contentType, key, clock.GetUtcNow());
