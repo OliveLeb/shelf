@@ -67,6 +67,15 @@ public sealed class ObjectStore : IDisposable
     // Standard S3 DELETE is idempotent: repeating after a lost response or process restart is safe.
     public Task Delete(string key, CancellationToken cancellation) => client.DeleteObjectAsync(bucket, key, cancellation);
 
+    public async Task<(string[] Keys, string? Continuation)> ListFiles(string? continuation, CancellationToken cancellation)
+    {
+        var page = await client.ListObjectsV2Async(new ListObjectsV2Request
+        {
+            BucketName = bucket, Prefix = "files/", MaxKeys = 1000, ContinuationToken = continuation
+        }, cancellation);
+        return ([.. (page.S3Objects ?? []).Select(item => item.Key)], page.NextContinuationToken);
+    }
+
     private static string Attachment(string fileName)
     {
         var fallback = new string([.. fileName.Select(c => c is >= ' ' and <= '~' and not ('"' or '\\') ? c : '_')]);

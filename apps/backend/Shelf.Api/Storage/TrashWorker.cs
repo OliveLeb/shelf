@@ -6,6 +6,9 @@ namespace Shelf.Api.Storage;
 /// <summary>Metadata expiry and durable, idempotent S3 deletion. Multiple API replicas can drain the outbox.</summary>
 public sealed class TrashWorker(NpgsqlDataSource source, ObjectStore store, TimeProvider clock, ILogger<TrashWorker> log) : BackgroundService
 {
+    private string? continuation;
+    private DateTimeOffset nextReconciliation;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
@@ -15,11 +18,40 @@ public sealed class TrashWorker(NpgsqlDataSource source, ObjectStore store, Time
                 await Task.Delay(TimeSpan.FromSeconds(1), stoppingToken);
                 await Expire(stoppingToken);
                 for (var count = 0; count < 100 && await DeleteNext(stoppingToken); count++) { }
+                if (clock.GetUtcNow() >= nextReconciliation) await Reconcile(stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             catch (PostgresException error) { log.LogWarning("storage_cleanup_database_retry {SqlState}", error.SqlState); }
             catch (NpgsqlException) { log.LogWarning("storage_cleanup_database_retry"); }
+            catch (Exception error) when (error is AmazonServiceException or AmazonClientException or HttpRequestException
+                || error is OperationCanceledException && !stoppingToken.IsCancellationRequested)
+            {
+                log.LogWarning("object_reconciliation_retry");
+                continuation = null;
+                nextReconciliation = clock.GetUtcNow().AddMinutes(1);
+            }
         }
+    }
+
+    private async Task Reconcile(CancellationToken cancellation)
+    {
+        var page = await store.ListFiles(continuation, cancellation);
+        await using var connection = await source.OpenConnectionAsync(cancellation);
+        // An old signed PUT (including one finishing after URL expiry) can recreate an acknowledged deletion.
+        // Upload keys commit before their URLs are returned; confirmation transfers ownership atomically.
+        // Use one DB snapshot for both owners, including trashed files and unconfirmed uploads.
+        await using var command = new NpgsqlCommand("""
+            INSERT INTO object_deletions (object_key)
+            SELECT object_key FROM unnest($1::text[]) AS objects(object_key)
+            WHERE NOT EXISTS (SELECT 1 FROM elements e WHERE e.object_key=objects.object_key)
+              AND NOT EXISTS (SELECT 1 FROM uploads u WHERE u.object_key=objects.object_key)
+            ON CONFLICT DO NOTHING
+            """, connection);
+        command.Parameters.AddWithValue(page.Keys);
+        await command.ExecuteNonQueryAsync(cancellation);
+        continuation = page.Continuation;
+        // Bound each tick to one page; repeat full scans indefinitely, including after host restarts.
+        nextReconciliation = continuation is null ? clock.GetUtcNow().AddMinutes(1) : clock.GetUtcNow();
     }
 
     private async Task Expire(CancellationToken cancellation)

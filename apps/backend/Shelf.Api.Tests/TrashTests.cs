@@ -113,6 +113,47 @@ public sealed class TrashTests : TestInstance
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Late_PUT_after_purge_is_collected_without_deleting_live_trashed_or_pending_content(bool confirmed)
+    {
+        var (_, owner) = await User();
+        var folder = await Folder(owner, "Remove");
+        var ticket = await Declare(owner, "late.jpg", Photo.Length, parentId: folder);
+        Assert.Equal(HttpStatusCode.OK, (await Put(ticket, Photo)).StatusCode);
+        if (confirmed) await Json(await Confirm(owner, ticket));
+        var kept = Id(await Upload(owner, "keep.jpg", content: "live"u8.ToArray()));
+        var trashed = Id(await Upload(owner, "restore.jpg", content: "trashed"u8.ToArray()));
+        await Delete(owner, trashed);
+        var pending = await Declare(owner, "pending.jpg", Photo.Length);
+        Assert.Equal(HttpStatusCode.OK, (await Put(pending, Photo)).StatusCode);
+        await Delete(owner, folder);
+        Assert.Equal(HttpStatusCode.NoContent, (await owner.DeleteAsync($"/trash/{folder}")).StatusCode);
+        await Eventually(async () => await ObjectCount() == 3);
+        // Let the successful DELETE be acknowledged before replaying the still-valid write capability.
+        await Task.Delay(1500);
+
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            Assert.Equal(HttpStatusCode.OK, (await Put(ticket, Photo)).StatusCode);
+            Assert.Equal(4, await ObjectCount());
+            Clock.Advance(TimeSpan.FromMinutes(2));
+            await Eventually(async () => await ObjectCount() == 3);
+            await Task.Delay(1500);
+        }
+
+        Assert.Equal(trashed, Id(Assert.Single(await Trash(owner))));
+        await Json(await Restore(owner, trashed));
+        var completed = Id(await Json(await Confirm(owner, pending)));
+        foreach (var (id, bytes) in new[] { (kept, "live"u8.ToArray()), (trashed, "trashed"u8.ToArray()), (completed, Photo) })
+        {
+            var link = await Json(await owner.GetAsync($"/files/{id}/download"));
+            Assert.Equal(bytes, await Transfer.GetByteArrayAsync(link.GetProperty("url").GetString()));
+        }
+        Assert.Equal(HttpStatusCode.NotFound, (await Restore(owner, folder)).StatusCode);
+    }
+
+    [Theory]
     [InlineData("active")]
     [InlineData("trashed")]
     [InlineData("purged")]

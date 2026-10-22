@@ -236,6 +236,18 @@ La réponse `204` garantit donc la purge des métadonnées et l’enregistrement
 travail S3 ; l’effacement physique suit en tâche de fond, sans dépendre de la
 disponibilité immédiate du fournisseur. Les journaux `object_deletion_retry` et
 `storage_cleanup_database_retry` signalent les reprises sans exposer de secret.
+
+Une ancienne URL d’envoi peut recréer un objet déjà purgé, même si l’envoi
+commencé avant son expiration se termine après. La tâche compare donc aussi
+les objets du préfixe `files/` aux fichiers (corbeille comprise) et aux envois
+en cours, dans un même instantané PostgreSQL. Les clés sans référence rejoignent
+la même file persistante. Le balayage traite au plus une page de 1 000 clés par
+seconde, recommence une minute après la fin et repart du début au redémarrage.
+Une panne de liste produit `object_reconciliation_retry`, sans empêcher le
+traitement de la file existante. Le préfixe `files/` est réservé à Shelf : toute
+écriture doit réserver sa clé en base avant d’envoyer les octets ; la confirmation
+transfère cette référence au fichier dans une transaction unique.
+
 Le bucket doit rester sans versionnement, comme indiqué dans le guide
 d’exploitation. Les miniatures seront intégrées au même mécanisme par #13.
 
