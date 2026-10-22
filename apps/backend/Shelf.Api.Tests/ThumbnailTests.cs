@@ -132,6 +132,31 @@ public sealed class ThumbnailTests : TestInstance
     }
 
     [Fact]
+    public async Task Failed_publication_discards_the_generated_object_without_losing_the_original()
+    {
+        var (_, owner) = await User();
+        // Inject a real PostgreSQL commit failure after the S3 PUT has completed.
+        await Sql("""
+            CREATE FUNCTION reject_preview_publication() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN RAISE EXCEPTION 'injected commit failure'; END; $$;
+            CREATE CONSTRAINT TRIGGER reject_preview_publication AFTER UPDATE ON elements
+            DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.thumbnail_state='available')
+            EXECUTE FUNCTION reject_preview_publication();
+            """);
+        var bytes = await Fixture("photo.jpg");
+        var ticket = await Declare(owner, "photo.jpg", bytes.Length, "image/jpeg");
+        await Put(ticket, bytes);
+        var id = Id(await Json(await Confirm(owner, ticket)));
+        Assert.Equal("unavailable", (await Ready(owner, id)).GetProperty("state").GetString());
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        while (DateTime.UtcNow < deadline && (await S3.ListObjectsV2Async(new() { BucketName = Bucket })).S3Objects.Count != 1)
+            await Task.Delay(100);
+        Assert.Single((await S3.ListObjectsV2Async(new() { BucketName = Bucket })).S3Objects);
+        var download = await Json(await owner.GetAsync($"/files/{id}/download"));
+        Assert.Equal(bytes, await Transfer.GetByteArrayAsync(download.GetProperty("url").GetString()));
+    }
+
+    [Fact]
     public async Task Replacement_and_copy_keep_independent_miniatures_and_purge_removes_only_the_target_objects()
     {
         var (_, owner) = await User();
