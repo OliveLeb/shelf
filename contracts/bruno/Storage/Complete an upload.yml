@@ -44,7 +44,9 @@ examples:
         data: |-
           {
             "id": "",
+            "kind": "",
             "name": "",
+            "parentId": "",
             "size": "",
             "contentType": "",
             "addedAt": "",

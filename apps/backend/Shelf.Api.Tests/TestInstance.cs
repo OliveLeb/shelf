@@ -134,6 +134,31 @@ public abstract class TestInstance : IAsyncLifetime
         var id = (await Json(response)).GetProperty("id").GetGuid();
         return (id, await SignIn(username));
     }
+    protected static readonly byte[] Photo = "not really a jpeg, but bytes all the same"u8.ToArray();
+    protected static async Task<JsonElement> Declare(HttpClient client, string name, long size, string contentType = "image/jpeg", Guid? parentId = null, string? onConflict = null)
+    {
+        var response = await client.PostAsJsonAsync("/uploads", new { name, size, contentType, parentId, onConflict });
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        return await Json(response);
+    }
+    protected static async Task<HttpResponseMessage> Put(JsonElement upload, byte[] content)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Put, upload.GetProperty("url").GetString()) { Content = new ByteArrayContent(content) };
+        foreach (var header in upload.GetProperty("headers").EnumerateObject()) request.Content.Headers.TryAddWithoutValidation(header.Name, header.Value.GetString());
+        return await Transfer.SendAsync(request);
+    }
+    protected static Task<HttpResponseMessage> Confirm(HttpClient client, JsonElement upload) => client.PostAsync($"/uploads/{upload.GetProperty("id").GetGuid()}/complete", null);
+    protected static async Task<JsonElement> Upload(HttpClient client, string name, Guid? parentId = null, byte[]? content = null, string? onConflict = null)
+    {
+        content ??= Photo;
+        var upload = await Declare(client, name, content.Length, parentId: parentId, onConflict: onConflict);
+        Assert.Equal(HttpStatusCode.OK, (await Put(upload, content)).StatusCode);
+        return await Json(await Confirm(client, upload));
+    }
+    protected static async Task<JsonElement[]> Root(HttpClient client) => [.. (await Json(await client.GetAsync("/spaces/personal/elements"))).EnumerateArray()];
+    protected static Guid Id(JsonElement element) => element.GetProperty("id").GetGuid();
+    protected static async Task<string?> Error(HttpResponseMessage response) => (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString();
+
     public async Task DisposeAsync()
     {
         Admin?.Dispose();

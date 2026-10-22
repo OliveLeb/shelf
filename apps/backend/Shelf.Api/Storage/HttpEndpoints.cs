@@ -40,9 +40,13 @@ public static class HttpEndpoints
             catch (Amazon.Runtime.AmazonServiceException) { return Results.Json(new { error = "storage_unavailable" }, statusCode: 503); }
         });
 
-        api.MapGet("/spaces/personal/elements", async (HttpContext h, CancellationToken _) => Results.Ok(await Db(h).PersonalRoot(Current(h)))).Produces<List<FileElement>>().WithSummary("List personal space files");
+        api.MapGet("/spaces/personal/elements", async (string? sort, string? order, HttpContext h) => Results.Ok(await Db(h).Content(Current(h), null, sort, order))).Produces<List<Element>>().WithSummary("List the personal space root");
         api.MapPost("/uploads", async (UploadRequest input, HttpContext h) => Results.Json(await Db(h).Declare(Current(h), input), statusCode: 201)).Produces<UploadTicket>(201).WithSummary("Declare an upload");
-        api.MapPost("/uploads/{id:guid}/complete", async (Guid id, HttpContext h) => Results.Json(await Db(h).Complete(Current(h), id), statusCode: 201)).Produces<FileElement>(201).WithSummary("Complete an upload");
+        api.MapPost("/uploads/{id:guid}/complete", async (Guid id, HttpContext h) => Results.Json(await Db(h).Complete(Current(h), id), statusCode: 201)).Produces<Element>(201).WithSummary("Complete an upload");
         api.MapGet("/files/{id:guid}/download", async (Guid id, HttpContext h) => Results.Ok(await Db(h).Download(Current(h), id))).Produces<SignedUrl>().WithSummary("Get a download link");
+        api.MapGet("/folders/{id:guid}/elements", async (Guid id, string? sort, string? order, HttpContext h) => Results.Ok(await Db(h).Content(Current(h), id, sort, order))).Produces<List<Element>>().WithSummary("List a folder");
+        api.MapPost("/folders", async (FolderRequest input, HttpContext h) => Results.Json(await Db(h).CreateFolder(Current(h), input), statusCode: 201)).Produces<Element>(201).WithSummary("Create a folder");
+        api.MapPost("/elements/{id:guid}/rename", async (Guid id, RenameRequest input, HttpContext h) => Results.Ok(await Db(h).Rename(Current(h), id, input))).Produces<Element>().WithSummary("Rename an element");
+        api.MapPost("/elements/{id:guid}/move", async (Guid id, MoveRequest input, HttpContext h) => Results.Ok(await Db(h).Move(Current(h), id, input))).Produces<Element>().WithSummary("Move an element");
     }
 }

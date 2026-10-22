@@ -1,5 +1,5 @@
 info:
-  name: List personal space files
+  name: List the personal space root
   type: http
   seq: 1
   tags:
@@ -8,6 +8,15 @@ info:
 http:
   method: GET
   url: "{{baseUrl}}/spaces/personal/elements"
+  params:
+    - name: sort
+      value: ""
+      type: query
+      disabled: true
+    - name: order
+      value: ""
+      type: query
+      disabled: true
   auth:
     type: bearer
     token: "{{token}}"
@@ -25,6 +34,15 @@ examples:
     request:
       url: "{{baseUrl}}/spaces/personal/elements"
       method: GET
+      params:
+        - name: sort
+          value: ""
+          type: query
+          disabled: true
+        - name: order
+          value: ""
+          type: query
+          disabled: true
     response:
       status: 200
       statusText: OK
@@ -37,7 +55,9 @@ examples:
           [
             {
               "id": "",
+              "kind": "",
               "name": "",
+              "parentId": "",
               "size": "",
               "contentType": "",
               "addedAt": "",
