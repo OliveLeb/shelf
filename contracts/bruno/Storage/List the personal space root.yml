@@ -1,7 +1,7 @@
 info:
   name: List the personal space root
   type: http
-  seq: 1
+  seq: 5
   tags:
     - Storage
 

@@ -192,8 +192,8 @@ public sealed class MultipartUploadTests : TestInstance
         await Put(large, Video, 1);
         var simple = await Declare(member, "photo.jpg", 10, parentId: folder);
         await Put(simple, Video[..10]);
-        // Folder deletion has no HTTP endpoint yet; remove the destination as test setup.
-        await Sql("DELETE FROM elements WHERE id=$1", folder);
+        Assert.Equal(HttpStatusCode.NoContent, (await member.DeleteAsync($"/elements/{folder}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await member.DeleteAsync($"/trash/{folder}")).StatusCode);
 
         Assert.Empty(await Root(member)); // The account and its session remain active.
         Assert.Equal(HttpStatusCode.NotFound, (await member.GetAsync($"/folders/{folder}/elements")).StatusCode);
@@ -210,6 +210,47 @@ public sealed class MultipartUploadTests : TestInstance
         Clock.Advance(TimeSpan.FromHours(24));
         await Eventually(async () => (await PendingMultipartUploads()).Length == 0 && (await Objects()).Length == 0);
         Assert.Empty(await Root(member));
+    }
+
+    [Theory]
+    [InlineData(false, "read")]
+    [InlineData(false, "revoked")]
+    [InlineData(true, "read")]
+    [InlineData(true, "revoked")]
+    public async Task Multipart_additions_and_replacements_recheck_write_access_and_expire_without_deleting_confirmed_content(bool replacement, string change)
+    {
+        var (_, owner) = await User("alice");
+        var (recipientId, recipient) = await User("bob");
+        var folder = Id(await Json(await owner.PostAsJsonAsync("/folders", new { name = "Shared" })));
+        var original = await Upload(owner, "original.jpg", folder);
+        var shared = replacement ? Id(original) : folder;
+        await Json(await owner.PutAsJsonAsync($"/elements/{shared}/shares/{recipientId}", new { level = "write" }));
+        var upload = replacement
+            ? await Json(await recipient.PostAsJsonAsync("/uploads", new { replaceFileId = shared, size = Video.Length, contentType = "video/mp4" }))
+            : await Declare(recipient, "pending.mp4", Video.Length, "video/mp4", folder);
+        await Put(upload, Video, 1, 3);
+        var resumed = await Json(await Resume(recipient, upload));
+        Assert.Equal([2], Numbers(resumed));
+        await Put(resumed, Video);
+        // A separate confirmed multipart file must survive both cleanup workers.
+        var kept = await Upload(owner, "kept.mp4", content: Video);
+
+        if (change == "read")
+            await Json(await owner.PutAsJsonAsync($"/elements/{shared}/shares/{recipientId}", new { level = "read" }));
+        else
+            Assert.Equal(HttpStatusCode.NoContent, (await owner.DeleteAsync($"/elements/{shared}/shares/{recipientId}")).StatusCode);
+        var expected = change == "read" ? HttpStatusCode.Forbidden : HttpStatusCode.NotFound;
+        Assert.Equal(expected, (await Resume(recipient, upload)).StatusCode);
+        Assert.Equal(expected, (await Confirm(recipient, upload)).StatusCode);
+        Assert.Equal(Id(original), Id(Assert.Single((await Json(await owner.GetAsync($"/folders/{folder}/elements"))).EnumerateArray())));
+
+        Clock.Advance(TimeSpan.FromHours(24));
+        await Eventually(async () => (await PendingMultipartUploads()).Length == 0 && (await Objects()).Length == 2);
+        foreach (var (file, bytes) in new[] { (original, Photo), (kept, Video) })
+        {
+            var download = await Json(await owner.GetAsync($"/files/{Id(file)}/download"));
+            Assert.Equal(bytes, await Transfer.GetByteArrayAsync(download.GetProperty("url").GetString()));
+        }
     }
 
 }

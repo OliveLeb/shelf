@@ -1,0 +1,63 @@
+info:
+  name: List a space trash
+  type: http
+  seq: 17
+  tags:
+    - Storage
+
+http:
+  method: GET
+  url: "{{baseUrl}}/spaces/:space/trash"
+  params:
+    - name: space
+      value: ""
+      type: path
+  auth:
+    type: bearer
+    token: "{{token}}"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+examples:
+  - name: 200 Response
+    description: OK
+    request:
+      url: "{{baseUrl}}/spaces/:space/trash"
+      method: GET
+      params:
+        - name: space
+          value: ""
+          type: path
+    response:
+      status: 200
+      statusText: OK
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          [
+            {
+              "id": "",
+              "element": {
+                "id": "",
+                "kind": "",
+                "name": "",
+                "parentId": "",
+                "size": "",
+                "contentType": "",
+                "addedAt": "",
+                "addedBy": ""
+              },
+              "originalParentId": "",
+              "originalPath": "",
+              "deletedAt": "",
+              "deletedBy": ""
+            }
+          ]

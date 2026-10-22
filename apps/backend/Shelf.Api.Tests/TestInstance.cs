@@ -39,6 +39,7 @@ public abstract class TestInstance : IAsyncLifetime
     private readonly string databaseName = "shelf_test_" + Guid.NewGuid().ToString("N");
     private string connectionString = "";
     private string adminConnection = "";
+    private Func<WebApplicationFactory<Program>> createApp = null!;
 
     public async Task InitializeAsync()
     {
@@ -59,7 +60,7 @@ public abstract class TestInstance : IAsyncLifetime
         var s3AccessKey = Environment.GetEnvironmentVariable("SHELF_TEST_S3_ACCESS_KEY") ?? "shelf";
         S3 = new AmazonS3Client(s3AccessKey, S3SecretKey, new AmazonS3Config { ServiceURL = s3Endpoint, ForcePathStyle = true, AuthenticationRegion = "us-east-1" });
         await S3.PutBucketAsync(Bucket);
-        App = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        createApp = () => new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
             builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
             {
@@ -79,6 +80,18 @@ public abstract class TestInstance : IAsyncLifetime
             builder.ConfigureServices(services => services.AddSingleton<TimeProvider>(Clock));
             builder.ConfigureLogging(logging => logging.ClearProviders().AddProvider(Logs));
         });
+        App = createApp();
+        Client = App.CreateClient();
+        Admin = await SignIn("owner");
+    }
+
+    protected async Task RestartApp(Action<IWebHostBuilder>? configure = null)
+    {
+        Admin.Dispose();
+        Client.Dispose();
+        await App.DisposeAsync();
+        App = createApp();
+        if (configure is not null) App = App.WithWebHostBuilder(configure);
         Client = App.CreateClient();
         Admin = await SignIn("owner");
     }
@@ -145,8 +158,9 @@ public abstract class TestInstance : IAsyncLifetime
         return await Json(response);
     }
     /// <summary>Sends each part listed by an upload ticket (or only the given part numbers) with its slice of the content.</summary>
-    protected static async Task Put(JsonElement upload, byte[] content, params int[] only)
+    protected static async Task<HttpResponseMessage> Put(JsonElement upload, byte[] content, params int[] only)
     {
+        HttpResponseMessage response = null!;
         var partSize = upload.GetProperty("partSize").GetInt64();
         foreach (var part in upload.GetProperty("parts").EnumerateArray())
         {
@@ -156,9 +170,10 @@ public abstract class TestInstance : IAsyncLifetime
             var end = (int)Math.Min(start + partSize, content.Length);
             var request = new HttpRequestMessage(HttpMethod.Put, part.GetProperty("url").GetString()) { Content = new ByteArrayContent(content[start..end]) };
             foreach (var header in upload.GetProperty("headers").EnumerateObject()) request.Content.Headers.TryAddWithoutValidation(header.Name, header.Value.GetString());
-            var response = await Transfer.SendAsync(request);
+            response = await Transfer.SendAsync(request);
             Assert.True(response.IsSuccessStatusCode, $"Part {number}: HTTP {(int)response.StatusCode} {await response.Content.ReadAsStringAsync()}");
         }
+        return response;
     }
     protected static Task<HttpResponseMessage> Confirm(HttpClient client, JsonElement upload) => client.PostAsync($"/uploads/{upload.GetProperty("id").GetGuid()}/complete", null);
     protected static async Task<JsonElement> Upload(HttpClient client, string name, Guid? parentId = null, byte[]? content = null, string? onConflict = null)

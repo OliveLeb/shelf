@@ -1,7 +1,7 @@
 info:
   name: Declare an upload
   type: http
-  seq: 2
+  seq: 8
   tags:
     - Storage
 
@@ -16,7 +16,9 @@ http:
         "size": "",
         "contentType": "",
         "parentId": "",
-        "onConflict": ""
+        "onConflict": "",
+        "space": "",
+        "replaceFileId": ""
       }
   auth:
     type: bearer
@@ -43,7 +45,9 @@ examples:
             "size": "",
             "contentType": "",
             "parentId": "",
-            "onConflict": ""
+            "onConflict": "",
+            "space": "",
+            "replaceFileId": ""
           }
     response:
       status: 201
@@ -67,3 +71,5 @@ examples:
             ],
             "expiresAt": ""
           }
+
+docs: Requires write access to the destination. To replace a specific writable file, including a shared file with a hidden parent, send replaceFileId, size and contentType without name, parentId, space or onConflict. Old content goes to the owner's trash at confirmation.

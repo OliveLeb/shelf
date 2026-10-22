@@ -546,6 +546,165 @@
         ]
       }
     },
+    "/shares/received": {
+      "get": {
+        "tags": [
+          "Storage"
+        ],
+        "summary": "List elements shared with me",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SharedElement"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/elements/{id}/shares": {
+      "get": {
+        "tags": [
+          "Storage"
+        ],
+        "summary": "List an element's shares",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Share"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/elements/{id}/shares/{recipientId}": {
+      "put": {
+        "tags": [
+          "Storage"
+        ],
+        "summary": "Set a share's level",
+        "description": "Only the owner may grant read or write. Write permits editing contents, not renaming, moving or deleting a shared root. Overlapping grants use the highest level.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "recipientId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShareRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Share"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Storage"
+        ],
+        "summary": "Remove a share",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "recipientId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
     "/spaces/personal/elements": {
       "get": {
         "tags": [
@@ -590,29 +749,38 @@
         ]
       }
     },
-    "/uploads": {
-      "post": {
+    "/spaces/common/elements": {
+      "get": {
         "tags": [
           "Storage"
         ],
-        "summary": "Declare an upload",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UploadRequest"
-              }
+        "summary": "List the common space root",
+        "parameters": [
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string"
             }
           },
-          "required": true
-        },
+          {
+            "name": "order",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
-          "201": {
-            "description": "Created",
+          "200": {
+            "description": "OK",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/UploadTicket"
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Element"
+                  }
                 }
               }
             }
@@ -661,12 +829,49 @@
         ]
       }
     },
+    "/uploads": {
+      "post": {
+        "tags": [
+          "Storage"
+        ],
+        "summary": "Declare an upload",
+        "description": "Requires write access to the destination. To replace a specific writable file, including a shared file with a hidden parent, send replaceFileId, size and contentType without name, parentId, space or onConflict. Old content goes to the owner's trash at confirmation.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadTicket"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
     "/uploads/{id}/complete": {
       "post": {
         "tags": [
           "Storage"
         ],
         "summary": "Complete an upload",
+        "description": "Rechecks write access and uploaded size before publishing. A targeted replacement preserves file identity and shares; revoked, read-only or trashed targets cannot be replaced.",
         "parameters": [
           {
             "name": "id",
@@ -912,6 +1117,210 @@
           }
         ]
       }
+    },
+    "/elements/{id}/copy": {
+      "post": {
+        "tags": [
+          "Storage"
+        ],
+        "summary": "Copy an element",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CopyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Element"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/elements/{id}": {
+      "delete": {
+        "tags": [
+          "Storage"
+        ],
+        "summary": "Move an element to its space trash",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/spaces/{space}/trash": {
+      "get": {
+        "tags": [
+          "Storage"
+        ],
+        "summary": "List a space trash",
+        "parameters": [
+          {
+            "name": "space",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TrashedElement"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Storage"
+        ],
+        "summary": "Empty a space trash",
+        "parameters": [
+          {
+            "name": "space",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/trash/{id}/restore": {
+      "post": {
+        "tags": [
+          "Storage"
+        ],
+        "summary": "Restore a trashed element",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Element"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/trash/{id}": {
+      "delete": {
+        "tags": [
+          "Storage"
+        ],
+        "summary": "Permanently purge a trashed element",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -957,6 +1366,24 @@
           },
           "username": {
             "type": "string"
+          }
+        }
+      },
+      "CopyRequest": {
+        "type": "object",
+        "properties": {
+          "parentId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "space": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -1060,6 +1487,12 @@
               "string"
             ],
             "format": "uuid"
+          },
+          "space": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -1190,9 +1623,6 @@
         }
       },
       "MoveRequest": {
-        "required": [
-          "parentId"
-        ],
         "type": "object",
         "properties": {
           "parentId": {
@@ -1201,6 +1631,12 @@
               "string"
             ],
             "format": "uuid"
+          },
+          "space": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -1353,6 +1789,59 @@
           }
         }
       },
+      "Share": {
+        "required": [
+          "elementId",
+          "recipient",
+          "level"
+        ],
+        "type": "object",
+        "properties": {
+          "elementId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "recipient": {
+            "$ref": "#/components/schemas/AccountSummary"
+          },
+          "level": {
+            "type": "string"
+          }
+        }
+      },
+      "SharedElement": {
+        "required": [
+          "element",
+          "owner",
+          "level"
+        ],
+        "type": "object",
+        "properties": {
+          "element": {
+            "$ref": "#/components/schemas/Element"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/AccountSummary"
+          },
+          "level": {
+            "type": "string"
+          }
+        }
+      },
+      "ShareRequest": {
+        "required": [
+          "level"
+        ],
+        "type": "object",
+        "properties": {
+          "level": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "SignedUrl": {
         "required": [
           "url",
@@ -1366,6 +1855,50 @@
           "expiresAt": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "TrashedElement": {
+        "required": [
+          "id",
+          "element",
+          "originalParentId",
+          "originalPath",
+          "deletedAt",
+          "deletedBy"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "element": {
+            "$ref": "#/components/schemas/Element"
+          },
+          "originalParentId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "originalPath": {
+            "type": "string"
+          },
+          "deletedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deletedBy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AccountSummary"
+              }
+            ]
           }
         }
       },
@@ -1430,6 +1963,19 @@
               "null",
               "string"
             ]
+          },
+          "space": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "replaceFileId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
           }
         }
       },

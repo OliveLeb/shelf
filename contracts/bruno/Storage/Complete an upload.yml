@@ -1,7 +1,7 @@
 info:
   name: Complete an upload
   type: http
-  seq: 4
+  seq: 9
   tags:
     - Storage
 
@@ -52,3 +52,5 @@ examples:
             "addedAt": "",
             "addedBy": ""
           }
+
+docs: Rechecks write access and uploaded size before publishing. A targeted replacement preserves file identity and shares; revoked, read-only or trashed targets cannot be replaced.

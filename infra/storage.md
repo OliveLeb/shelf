@@ -91,6 +91,9 @@ par défaut). C'est le seul accès au contenu pour les clients
 - Ne pas activer le versionnement sur le bucket des fichiers : une version
   conservée survivrait à la purge de la corbeille et à la suppression d'un
   compte.
+- Réserver le préfixe `files/` à Shelf : la tâche de purge supprime les objets
+  sans référence dans PostgreSQL, y compris ceux déposés manuellement. Ne pas
+  partager ce préfixe avec une autre instance ou application.
 
 La clé de l'API ne reçoit que les opérations dont l'API a besoin sur ce bucket.
 Avec une politique au format IAM (AWS, MinIO et de nombreux fournisseurs) :
@@ -198,6 +201,40 @@ applique une règle globale, qui autorise toutes les origines par défaut. Cela
 suffit en développement ; pour reproduire la restriction en local, démarrer
 MinIO avec `MINIO_API_CORS_ALLOW_ORIGIN=http://localhost:3000` (l'origine
 cliente locale).
+
+## Copies côté serveur
+
+La copie utilise `CopyObject`, ou `UploadPartCopy` au-delà de
+`Storage__S3__SingleCopyLimitBytes` (5 Gio par défaut). Régler cette limite
+selon le fournisseur ; `Storage__S3__CopyPartSizeBytes` vaut 128 Mio par défaut.
+Les deux réglages acceptent de 5 Mio à 5 Gio. Les permissions `GetObject`,
+`PutObject` et `AbortMultipartUpload` ci-dessus couvrent ces opérations.
+Les octets restent chez le fournisseur S3 ; prévoir l'espace occupé par une
+nouvelle copie complète et les coûts de requêtes correspondants.
+
+Configurer sur le bucket des fichiers une règle d'abandon des envois en plusieurs
+parties, pour les copies interrompues par un arrêt du processus. Exemple de règle
+à intégrer à la configuration de cycle de vie du fournisseur :
+
+```xml
+<Rule>
+  <ID>abort-abandoned-file-uploads</ID>
+  <Filter><Prefix>files/</Prefix></Filter>
+  <Status>Enabled</Status>
+  <AbortIncompleteMultipartUpload><DaysAfterInitiation>7</DaysAfterInitiation></AbortIncompleteMultipartUpload>
+</Rule>
+```
+
+Ne pas expirer les objets complets sous `files/` : cela supprimerait aussi les
+fichiers actifs. Le nettoyage d'une copie échouée est immédiat mais au mieux :
+une panne S3, un arrêt du processus ou un échec du commit PostgreSQL peut laisser
+des objets complets orphelins. Le balayage périodique les reprend dans la file
+persistante de suppression et attend la fin des copies avant de comparer les
+références en base. Pour une intervention manuelle, arrêter les écritures de l'API,
+comparer la liste du bucket aux clés référencées par `elements.object_key` **et**
+`uploads.object_key`, puis examiner les objets non référencés avant toute
+suppression. Ne pas supprimer d'objets à partir d'un instantané de base ancien
+ou pendant une copie en cours.
 
 ## Sauvegarde quotidienne de PostgreSQL
 
@@ -353,7 +390,9 @@ clé d'administration S3 (la clé de sauvegarde ne peut pas lire).
 
 5. Appliquer les migrations de la version déployée, avec la configuration de
    l'API (`ConnectionStrings__Shelf`), sans risque si elles sont déjà
-   présentes, puis redémarrer l'API et le minuteur :
+   présentes. Avant de redémarrer l'API et le minuteur, copier le bucket à part
+   si l'on veut récupérer les fichiers envoyés après la sauvegarde : le balayage
+   les supprimera, faute de référence dans la base restaurée.
 
    ```sh
    dotnet Shelf.Api.dll migrate
@@ -362,9 +401,12 @@ clé d'administration S3 (la clé de sauvegarde ne peut pas lire).
 6. Vérifier qu'un utilisateur se connecte et télécharge un fichier connu.
 
 La restauration ramène la base à l'état de la sauvegarde, au plus un jour plus
-tôt. Les fichiers envoyés depuis restent dans le bucket sans nom ni dossier, et
-les fichiers purgés depuis apparaissent mais ne se téléchargent plus. Les
-comptes, sessions et liens actifs sont ceux de la sauvegarde.
+tôt. Les fichiers envoyés depuis n'ont plus de référence en base : le balayage
+des objets orphelins les supprimera après le redémarrage de l'API. Pour tenter
+de les récupérer, copier le bucket à part **avant de redémarrer l'API** ; cette
+copie ne restitue pas leurs noms et dossiers. Les fichiers purgés depuis la
+sauvegarde apparaissent mais ne se téléchargent plus. Les comptes, sessions et
+liens actifs sont ceux de la sauvegarde.
 
 La sauvegarde n'est pas testée automatiquement : rejouer cette procédure sur une
 base jetable après l'installation, puis à chaque changement de version majeure

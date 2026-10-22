@@ -162,7 +162,7 @@ mais limite le débit global des opérations de compte. Les autres opérations
 futures (stockage, santé) ne doivent pas utiliser ce verrou. Une évolution du
 verrouillage devra conserver les tests concurrents de l’issue.
 
-## Suppression et futur stockage
+## Suppression et stockage
 
 Une suppression efface le compte, toutes ses sessions, ses données de récupération
 et les invitations consommées qui lui sont rattachées, même après changement
@@ -171,8 +171,11 @@ désactivation conserve son compte, ses identifiants et les métadonnées associ
 Toute suppression, désactivation ou rétrogradation qui retirerait le dernier
 administrateur actif est refusée, même par commande serveur ou en concurrence.
 
-Aucun fichier utilisateur n’existe dans ce modèle. Le futur stockage devra purger
-définitivement tous les fichiers du compte lors d’une suppression et les conserver
-lors d’une désactivation. Intégrer alors cette purge au cycle de suppression et
-la tester avec le stockage réel. Les tests actuels ne prétendent pas vérifier
-une suppression physique de fichiers.
+Une suppression efface les métadonnées de l’espace personnel. Les éléments
+ajoutés dans l’espace commun, y compris ceux transférés depuis l’espace personnel,
+sont conservés ; leur auteur devient anonyme (`addedBy: null`). Une désactivation
+conserve les deux espaces et leurs contenus, mais retire l’accès du compte.
+
+La purge physique des objets S3 de l’espace personnel lors de la suppression
+d’un compte reste à livrer par l’issue #15. Actuellement ces objets restent dans
+le bucket ; voir [les limites du stockage](storage.md#limites-actuelles).
