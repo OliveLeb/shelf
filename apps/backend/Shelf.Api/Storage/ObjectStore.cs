@@ -64,6 +64,9 @@ public sealed class ObjectStore : IDisposable
         catch (AmazonS3Exception error) when (error.StatusCode == HttpStatusCode.NotFound) { return null; }
     }
 
+    // Standard S3 DELETE is idempotent: repeating after a lost response or process restart is safe.
+    public Task Delete(string key, CancellationToken cancellation) => client.DeleteObjectAsync(bucket, key, cancellation);
+
     private static string Attachment(string fileName)
     {
         var fallback = new string([.. fileName.Select(c => c is >= ' ' and <= '~' and not ('"' or '\\') ? c : '_')]);
