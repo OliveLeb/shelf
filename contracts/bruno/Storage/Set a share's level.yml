@@ -68,3 +68,5 @@ examples:
             },
             "level": ""
           }
+
+docs: Only the owner may grant read or write. Write permits editing contents, not renaming, moving or deleting a shared root. Overlapping grants use the highest level.

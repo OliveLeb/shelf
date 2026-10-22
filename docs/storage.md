@@ -7,7 +7,8 @@ d’un fichier dans son **espace personnel**),
 déplacement et noms uniques) et [l’issue #8](https://github.com/OliveLeb/shelf/issues/8)
 (**espace commun**) et [l’issue #9](https://github.com/OliveLeb/shelf/issues/9)
 (**partages en Lecture** et **Partagés avec moi**), puis
-[l’issue #10](https://github.com/OliveLeb/shelf/issues/10) (**corbeille et purge**).
+[l’issue #10](https://github.com/OliveLeb/shelf/issues/10) (**corbeille et purge**) et
+[l’issue #12](https://github.com/OliveLeb/shelf/issues/12) (**partages en Écriture**).
 Le vocabulaire suit [`CONTEXT.md`](../CONTEXT.md).
 
 Le contenu des fichiers vit dans un bucket compatible S3 privé et transite
@@ -58,10 +59,10 @@ JSON avec `Cache-Control: no-store` et signalent les erreurs par
 | `POST /folders` | `name`, `parentId` (dossier parent ; absent ou `null` : racine), `space` | 201, dossier créé |
 | `POST /elements/{id}/rename` | `name` | 200, élément renommé |
 | `POST /elements/{id}/move` | `parentId` (dossier de destination ; `null` : racine), `space` | 200, élément déplacé |
-| `POST /uploads` | `name`, `size`, `contentType` (défaut `application/octet-stream`), `parentId`, `onConflict`, `space` | 201, `{id, url, method, headers, expiresAt}` |
+| `POST /uploads` | `name`, `size`, `contentType` (défaut `application/octet-stream`), `parentId`, `onConflict`, `space` ; ou `replaceFileId`, `size`, `contentType` pour remplacer un fichier précis | 201, `{id, url, method, headers, expiresAt}` |
 | `POST /uploads/{id}/complete` | — | 201, fichier créé |
 | `GET /files/{id}/download` | — | 200, `{url, expiresAt}` |
-| `PUT /elements/{id}/shares/{recipientId}` | `level` (`read`) | 200, partage créé ou mis à jour |
+| `PUT /elements/{id}/shares/{recipientId}` | `level` (`read` ou `write`) | 200, partage créé ou mis à jour |
 | `GET /elements/{id}/shares` | — | 200, partages directs et hérités de l’élément, réservés au propriétaire |
 | `DELETE /elements/{id}/shares/{recipientId}` | — | 204, partage direct retiré |
 | `GET /shares/received` | — | 200, racines des partages reçus avec leur propriétaire et leur niveau |
@@ -92,8 +93,8 @@ si `space` est fourni, il doit correspondre à celui du dossier.
 Pour déplacer un élément personnel vers la racine commune, fournir
 `{ "space": "common" }` à `POST /elements/{id}/move`. Pour le placer dans un
 dossier commun, fournir son `parentId`, avec ou sans `space`. Seul le propriétaire
-de l’espace personnel peut effectuer ce transfert ; un tiers, administrateur
-compris, reçoit `404`.
+de l’espace personnel peut effectuer ce transfert ; un destinataire de partage
+reçoit `403`, un tiers sans accès (administrateur compris) reçoit `404`.
 
 Le transfert conserve les identifiants et toutes les métadonnées des descendants,
 sauf l’emplacement de l’élément déplacé et l’espace de son contenu. Les envois en
@@ -106,14 +107,14 @@ va à la racine de l’espace actuel de l’élément, donc à la racine commune
 élément commun. Les noms uniques, le tri et la politique `keepBoth` s’appliquent
 de la même façon dans les deux espaces.
 
-### Partages en Lecture
+### Partages en Lecture et en Écriture
 
 Seul le **propriétaire** d’un élément personnel peut créer, modifier, consulter
 ou retirer ses partages. `PUT /elements/{id}/shares/{recipientId}` accorde la
-Lecture à un autre compte actif. Le couple élément/destinataire est unique :
+Lecture (`read`) ou l’Écriture (`write`) à un autre compte actif. Le couple élément/destinataire est unique :
 répéter le `PUT` met à jour le niveau du partage sans le dupliquer. Le niveau
-est stocké et modifiable par cette même route ; seul `"read"` est accepté à ce
-stade. L’Écriture sera livrée par l’issue #12 et reste refusée ici.
+est stocké et modifiable par cette même route. La migration `008_write_shares`
+ajoute le niveau Écriture et les envois ciblant un fichier à remplacer.
 
 Un partage contient `elementId` (racine du partage), `recipient` (`{id, username}`)
 et `level`. La consultation par le propriétaire inclut les partages directs et
@@ -128,7 +129,8 @@ Les partages qui se chevauchent ne se réduisent pas entre eux : retirer celui
 d’un dossier laisse actif un éventuel partage direct sur un de ses fichiers.
 Le transfert vers l’espace commun retire les partages du sous-arbre transféré.
 
-`GET /shares/received` renvoie une liste de `{element, owner, level}`. `owner`
+`GET /shares/received` renvoie une liste de `{element, owner, level}` ; `level`
+est le droit effectif le plus élevé, partages hérités compris. `owner`
 contient l’identifiant et le nom du propriétaire, indépendamment de l’auteur de
 l’ajout. Seules les racines explicitement partagées apparaissent dans cette vue ;
 les descendants se parcourent avec `GET /folders/{id}/elements`. Un fichier
@@ -143,6 +145,28 @@ destinataire (`403`). Un tiers sans partage, administrateur compris, reçoit
 `404` pour un élément invisible. Retirer le dernier partage couvrant un élément
 le rend de nouveau invisible. Une URL S3 déjà délivrée reste toutefois valide
 jusqu’à son expiration ; le retrait interdit immédiatement d’en obtenir une nouvelle.
+
+En Écriture, le destinataire crée des dossiers, envoie, remplace, renomme,
+déplace et supprime les éléments à l’intérieur d’un dossier partagé. Les ajouts
+appartiennent au propriétaire de l’espace, même si `addedBy` désigne le
+destinataire. Une suppression rejoint la corbeille du propriétaire, que lui seul
+peut restaurer. Sur un fichier partagé isolément, l’Écriture autorise le
+remplacement de son contenu, sans donner accès au dossier parent.
+
+La racine de tout partage reste sous le seul contrôle du propriétaire : un
+destinataire ne peut ni la renommer, ni la déplacer, ni la supprimer (`403`).
+Déplacer ou supprimer un dossier contenant une autre racine partagée est aussi
+refusé : cela ne doit pas contourner cette protection. Un partage en Lecture
+ne réduit jamais une Écriture héritée ; inversement, une Écriture directe sur
+un fichier prévaut sur la Lecture de son dossier.
+
+Un destinataire peut déplacer les éléments non protégés entre deux dossiers
+du même propriétaire si la source et la destination lui accordent l’Écriture.
+Une destination en Lecture seule est refusée. Il ne peut jamais déplacer un
+élément vers son espace personnel, l’espace d’un autre propriétaire ou l’espace
+commun. Les changements de partage, confirmations et déplacements sont
+sérialisés avec les écritures sur l’espace concerné, y compris quand le
+destinataire n’en est pas le propriétaire.
 
 ### Dossiers
 
@@ -193,6 +217,16 @@ incomplet ne modifient jamais le fichier existant. Si le nom est libre à la
 confirmation, un nouveau fichier est créé ; un dossier du même nom reste un
 conflit `409`. Les noms sont revérifiés à la confirmation, sous le même verrou
 que les suppressions, restaurations et déplacements.
+
+Pour remplacer un fichier partagé sans droit d’ajout dans son dossier, fournir
+`{ "replaceFileId": "<id>", "size": 123, "contentType": "image/jpeg" }`
+à `POST /uploads`, sans `name`, `parentId`, `space` ni `onConflict`. Le fichier
+est ciblé par son identifiant : un renommage ou déplacement par le propriétaire
+avant confirmation ne fait jamais remplacer un autre fichier ni créer un ajout.
+Le destinataire doit conserver l’Écriture sur ce fichier lors de la déclaration
+et de la confirmation. Un retrait de partage, une rétrogradation en Lecture ou
+un passage en corbeille empêche la confirmation. Les mêmes revérifications
+s’appliquent aux ajouts dans les dossiers partagés.
 
 Le bucket doit autoriser le CORS de l’origine cliente pour les transferts depuis
 un navigateur : voir [la règle CORS](../infra/storage.md#cors-du-bucket-des-fichiers).
@@ -265,12 +299,13 @@ selon RFC 5987). Les requêtes partielles (`Range`) sont prises en charge par le
 | 400 | `invalid_size` | Taille absente ou négative |
 | 400 | `invalid_content_type` | Type de contenu invalide |
 | 400 | `invalid_conflict_policy` | `onConflict` autre que `keepBoth` ou `replace` |
-| 400 | `invalid_share_level` | Niveau autre que `read` (y compris absent) |
+| 400 | `invalid_upload_destination` | `replaceFileId` combiné avec `name`, `parentId`, `space` ou `onConflict` |
+| 400 | `invalid_share_level` | Niveau autre que `read` ou `write` (y compris absent) |
 | 400 | `invalid_recipient` | Destinataire inexistant, désactivé ou identique au propriétaire |
 | 400 | `invalid_space` | `space` autre que `personal` ou `common` |
 | 400 | `invalid_sort`, `invalid_order` | `sort` ou `order` inconnu |
 | 401 | `authentication_required` | Session absente, expirée ou compte désactivé |
-| 403 | `write_forbidden` | Écriture sur un élément ou dans un dossier partagé en Lecture |
+| 403 | `write_forbidden` | Écriture en Lecture seule, modification d’une racine partagée ou déplacement interdit hors de l’espace du propriétaire |
 | 403 | `sharing_forbidden` | Gestion des partages par un destinataire ou sur un élément commun |
 | 403 | `common_to_personal_forbidden` | Déplacement d’un élément commun vers un espace personnel |
 | 404 | `upload_not_found` | Envoi inconnu, déjà confirmé ou déclaré par un autre utilisateur |
@@ -289,7 +324,7 @@ accès au contenu.
 
 ## Limites actuelles
 
-Les partages en Écriture, l’envoi en plusieurs parties, l’expiration des envois
+L’envoi en plusieurs parties, l’expiration des envois
 abandonnés et les miniatures restent livrés par les autres sous-issues de #3.
 La file de suppression reçoit aussi les objets effacés par cascade lors de la
 suppression d’un compte ; la validation complète du cycle de vie des comptes et

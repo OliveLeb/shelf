@@ -17,7 +17,8 @@ http:
         "contentType": "",
         "parentId": "",
         "onConflict": "",
-        "space": ""
+        "space": "",
+        "replaceFileId": ""
       }
   auth:
     type: bearer
@@ -45,7 +46,8 @@ examples:
             "contentType": "",
             "parentId": "",
             "onConflict": "",
-            "space": ""
+            "space": "",
+            "replaceFileId": ""
           }
     response:
       status: 201
@@ -63,3 +65,5 @@ examples:
             "headers": {},
             "expiresAt": ""
           }
+
+docs: Requires write access to the destination. To replace a specific writable file, including a shared file with a hidden parent, send replaceFileId, size and contentType without name, parentId, space or onConflict. Old content goes to the owner's trash at confirmation.

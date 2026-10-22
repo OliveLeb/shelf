@@ -25,7 +25,7 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
     public async Task<Element> CreateFolder(Account account, FolderRequest input)
     {
         var name = Name(input.Name);
-        await LockSpaces(account);
+        await LockSpaces(account, folderId: input.ParentId);
         var space = await Destination(account, input.ParentId, input.Space);
         var id = Guid.NewGuid();
         await Run("INSERT INTO elements (id, space_id, parent_id, kind, name, added_at, added_by) VALUES ($1,$2,$3,'folder',$4,$5,$6)",
@@ -35,21 +35,36 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
 
     public async Task<UploadTicket> Declare(Account account, UploadRequest input)
     {
-        var name = Name(input.Name);
         if (input.Size is not >= 0) throw new StorageError(400, "invalid_size");
         var contentType = ContentType(input.ContentType);
         if (input.OnConflict is not (null or "keepBoth" or "replace")) throw new StorageError(400, "invalid_conflict_policy");
-        await LockSpaces(account);
-        var space = await Destination(account, input.ParentId, input.Space);
-        // Checked again at confirmation, since another element may take the name meanwhile.
-        if (input.OnConflict is null && await Scalar("SELECT 1 FROM elements WHERE space_id=$1 AND parent_id IS NOT DISTINCT FROM $2 AND upper(name)=upper($3) AND trash_id IS NULL", space, input.ParentId, name) is not null)
-            throw new StorageError(409, "name_conflict");
-        if (input.OnConflict == "replace" && await Scalar("SELECT 1 FROM elements WHERE space_id=$1 AND parent_id IS NOT DISTINCT FROM $2 AND upper(name)=upper($3) AND trash_id IS NULL AND kind='folder'", space, input.ParentId, name) is not null)
-            throw new StorageError(409, "name_conflict");
+        await LockSpaces(account, elementId: input.ReplaceFileId, folderId: input.ParentId);
+        string name;
+        Guid space;
+        if (input.ReplaceFileId is Guid fileId)
+        {
+            if (input.Name is not null || input.ParentId is not null || input.Space is not null || input.OnConflict is not null)
+                throw new StorageError(400, "invalid_upload_destination");
+            var access = await Access(account, fileId);
+            if (access.Kind != "file") throw new StorageError(404, "element_not_found");
+            if (!access.CanWrite) throw new StorageError(403, "write_forbidden");
+            name = (await Get(fileId)).Name;
+            space = access.Space;
+        }
+        else
+        {
+            name = Name(input.Name);
+            space = await Destination(account, input.ParentId, input.Space);
+            // Checked again at confirmation, since another element may take the name meanwhile.
+            if (input.OnConflict is null && await Scalar("SELECT 1 FROM elements WHERE space_id=$1 AND parent_id IS NOT DISTINCT FROM $2 AND upper(name)=upper($3) AND trash_id IS NULL", space, input.ParentId, name) is not null)
+                throw new StorageError(409, "name_conflict");
+            if (input.OnConflict == "replace" && await Scalar("SELECT 1 FROM elements WHERE space_id=$1 AND parent_id IS NOT DISTINCT FROM $2 AND upper(name)=upper($3) AND trash_id IS NULL AND kind='folder'", space, input.ParentId, name) is not null)
+                throw new StorageError(409, "name_conflict");
+        }
         var id = Guid.NewGuid();
         var key = ObjectStore.NewKey();
-        await Run("INSERT INTO uploads (id, space_id, account_id, name, size, content_type, object_key, created_at, parent_id, on_conflict) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
-            id, space, account.Id, name, input.Size.Value, contentType, key, clock.GetUtcNow(), input.ParentId, input.OnConflict);
+        await Run("INSERT INTO uploads (id, space_id, account_id, name, size, content_type, object_key, created_at, parent_id, on_conflict, replace_file_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+            id, space, account.Id, name, input.Size.Value, contentType, key, clock.GetUtcNow(), input.ParentId, input.OnConflict, input.ReplaceFileId);
         var signed = store.SignedUpload(key, contentType);
         return new(id, signed.Url, "PUT", new Dictionary<string, string> { ["Content-Type"] = contentType }, signed.ExpiresAt);
     }
@@ -57,18 +72,31 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
     public async Task<Element> Complete(Account account, Guid uploadId)
     {
         // Serialize confirmation with replacement, trash, restore and moves before resolving the current name.
-        await LockSpaces(account, moving: true);
-        var uploads = await Query("SELECT space_id, name, size, content_type, object_key, parent_id, on_conflict FROM uploads WHERE id=$1 AND account_id=$2 FOR UPDATE",
+        await LockSpaces(account, moving: true, uploadId: uploadId);
+        var uploads = await Query("SELECT space_id, name, size, content_type, object_key, parent_id, on_conflict, replace_file_id FROM uploads WHERE id=$1 AND account_id=$2 FOR UPDATE",
             r => (Space: r.GetGuid(0), Name: r.GetString(1), Size: r.GetInt64(2), ContentType: r.GetString(3), Key: r.GetString(4),
-                Parent: r.IsDBNull(5) ? (Guid?)null : r.GetGuid(5), Policy: r.IsDBNull(6) ? null : r.GetString(6)), uploadId, account.Id);
+                Parent: r.IsDBNull(5) ? (Guid?)null : r.GetGuid(5), Policy: r.IsDBNull(6) ? null : r.GetString(6),
+                Target: r.IsDBNull(7) ? (Guid?)null : r.GetGuid(7)), uploadId, account.Id);
         if (uploads.Count == 0) throw new StorageError(404, "upload_not_found");
         var upload = uploads[0];
+        ElementAccess? target = null;
+        if (upload.Target is Guid targetId)
+        {
+            target = await Access(account, targetId);
+            if (!target.CanWrite) throw new StorageError(403, "write_forbidden");
+        }
         // The destination may have moved since declaration; recheck it under the space locks.
         if (upload.Parent is not null && await Destination(account, upload.Parent) != upload.Space)
             throw new StorageError(404, "folder_not_found");
         var size = await store.Size(upload.Key, cancellation);
         if (size is null) throw new StorageError(409, "upload_incomplete");
         if (size != upload.Size) throw new StorageError(409, "size_mismatch");
+        if (upload.Target is Guid replacementId)
+        {
+            var replaced = await ReplaceContent(account, replacementId, target!.Space, upload.Key, upload.Size, upload.ContentType);
+            await Run("DELETE FROM uploads WHERE id=$1", uploadId);
+            return replaced;
+        }
         if (upload.Policy == "replace")
         {
             var existing = await Query("SELECT id, kind FROM elements WHERE space_id=$1 AND parent_id IS NOT DISTINCT FROM $2 AND upper(name)=upper($3) AND trash_id IS NULL",
@@ -111,9 +139,9 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
     public async Task<Element> Rename(Account account, Guid elementId, RenameRequest input)
     {
         var name = Name(input.Name);
-        await LockSpaces(account);
+        await LockSpaces(account, elementId: elementId);
         var access = await Access(account, elementId);
-        if (!access.CanWrite) throw new StorageError(403, "write_forbidden");
+        if (!access.CanWrite || !access.CanManage) throw new StorageError(403, "write_forbidden");
         await Run("UPDATE elements SET name=$2 WHERE id=$1", elementId, name);
         return await Get(elementId);
     }
@@ -121,13 +149,15 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
     /// <summary>Moving changes metadata only; the S3 object key does not depend on the folder.</summary>
     public async Task<Element> Move(Account account, Guid elementId, MoveRequest input)
     {
-        await LockSpaces(account, moving: true);
+        await LockSpaces(account, moving: true, elementId: elementId, folderId: input.ParentId);
         var access = await Access(account, elementId);
-        if (!access.CanWrite) throw new StorageError(403, "write_forbidden");
+        await RequireMutableSubtree(account, elementId, access);
         var space = access.Space;
         var common = access.Owner is null;
         var destination = await Destination(account, input.ParentId, input.Space ?? (input.ParentId is null && common ? "common" : null));
         if (common && destination != space) throw new StorageError(403, "common_to_personal_forbidden");
+        if (destination != space && (access.Owner != account.Id || destination != await Destination(account, null, "common")))
+            throw new StorageError(403, "write_forbidden");
         if (input.ParentId is not null && await Scalar("""
             WITH RECURSIVE ancestors(id, parent_id) AS (
                 SELECT id, parent_id FROM elements WHERE id=$1
@@ -153,9 +183,14 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
     }
 
     /// <summary>Writes share locks; moves exclude writes so a subtree cannot gain children during transfer.
-    /// Lock both accessible spaces in UUID order to avoid deadlocks between personal-to-common transfers.
+    /// Lock personal, common and operation-specific spaces in UUID order, including another owner's shared space.
     /// NO KEY UPDATE lets foreign key checks proceed, and concurrent ordinary writes remain possible.</summary>
-    private Task LockSpaces(Account account, bool moving = false) => Run($"SELECT id FROM spaces WHERE owner_id=$1 OR owner_id IS NULL ORDER BY id FOR {(moving ? "NO KEY UPDATE" : "SHARE")}", account.Id);
+    private Task LockSpaces(Account account, bool moving = false, Guid? elementId = null, Guid? folderId = null, Guid? uploadId = null) => Run($"""
+        SELECT id FROM spaces WHERE owner_id=$1 OR owner_id IS NULL
+            OR id IN (SELECT space_id FROM elements WHERE id=$2 OR id=$3)
+            OR id IN (SELECT space_id FROM uploads WHERE id=$4 AND account_id=$1)
+        ORDER BY id FOR {(moving ? "NO KEY UPDATE" : "SHARE")}
+        """, account.Id, elementId, folderId, uploadId);
 
     /// <summary>Space of a visible folder, or the selected root (personal by default). An explicit space must match the folder.</summary>
     private async Task<Guid> Destination(Account account, Guid? folderId, string? space = null, bool writable = true)
