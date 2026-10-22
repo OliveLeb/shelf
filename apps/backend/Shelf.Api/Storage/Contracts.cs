@@ -1,7 +1,7 @@
 namespace Shelf.Api.Storage;
 
-/// <summary>Declares an upload into a folder, or the selected space's root (personal by default). OnConflict "keepBoth" renames; "replace" preserves the file and trashes its previous content.</summary>
-public sealed record UploadRequest(string? Name, long? Size, string? ContentType, Guid? ParentId = null, string? OnConflict = null, string? Space = null);
+/// <summary>Declares an upload into a folder, or the selected space's root (personal by default). OnConflict "keepBoth" renames; "replace" preserves the file and trashes its previous content. Alternatively, ReplaceFileId replaces exactly that file, without Name, ParentId, Space or OnConflict, even when its parent is hidden.</summary>
+public sealed record UploadRequest(string? Name, long? Size, string? ContentType, Guid? ParentId = null, string? OnConflict = null, string? Space = null, Guid? ReplaceFileId = null);
 public sealed record UploadTicket(Guid Id, string Url, string Method, IReadOnlyDictionary<string, string> Headers, DateTimeOffset ExpiresAt);
 public sealed record FolderRequest(string? Name, Guid? ParentId = null, string? Space = null);
 public sealed record RenameRequest(string? Name);
@@ -17,7 +17,7 @@ public sealed class StorageError(int status, string code) : Exception(code)
     public string Code { get; } = code;
 }
 
-/// <summary>Sets a share's level. Only "read" is supported until write sharing is available.</summary>
+/// <summary>Sets a share's level to "read" or "write". Only the owner manages shares; recipients cannot rename, move or delete a shared root.</summary>
 public sealed record ShareRequest(string? Level);
 /// <summary>A direct or inherited grant; ElementId identifies the root on which it was granted.</summary>
 public sealed record Share(Guid ElementId, AccountSummary Recipient, string Level);

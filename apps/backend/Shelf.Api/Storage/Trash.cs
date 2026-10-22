@@ -6,9 +6,9 @@ public sealed partial class StorageTransaction
 {
     public async Task Delete(Account account, Guid id)
     {
-        await LockSpaces(account, moving: true);
+        await LockSpaces(account, moving: true, elementId: id);
         var access = await Access(account, id);
-        if (!access.CanWrite) throw new StorageError(403, "write_forbidden");
+        await RequireMutableSubtree(account, id, access);
         await SendToTrash(account, id, access.Space);
     }
 
