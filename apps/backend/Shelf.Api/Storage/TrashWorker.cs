@@ -37,6 +37,14 @@ public sealed class TrashWorker(NpgsqlDataSource source, ObjectStore store, Time
     {
         var page = await store.ListFiles(continuation, cancellation);
         await using var connection = await source.OpenConnectionAsync(cancellation);
+        await using var transaction = await connection.BeginTransactionAsync(cancellation);
+        // A copy's objects are visible in S3 before its metadata commits. Wait before taking
+        // the reference snapshot, including when another API replica is performing the copy.
+        await using (var gate = new NpgsqlCommand("SELECT pg_advisory_xact_lock($1)", connection, transaction))
+        {
+            gate.Parameters.AddWithValue(StorageTransaction.CopyReconciliationLock);
+            await gate.ExecuteNonQueryAsync(cancellation);
+        }
         // An old signed PUT (including one finishing after URL expiry) can recreate an acknowledged deletion.
         // Upload keys commit before their URLs are returned; confirmation transfers ownership atomically.
         // Use one DB snapshot for both owners, including trashed files and unconfirmed uploads.
@@ -46,9 +54,10 @@ public sealed class TrashWorker(NpgsqlDataSource source, ObjectStore store, Time
             WHERE NOT EXISTS (SELECT 1 FROM elements e WHERE e.object_key=objects.object_key)
               AND NOT EXISTS (SELECT 1 FROM uploads u WHERE u.object_key=objects.object_key)
             ON CONFLICT DO NOTHING
-            """, connection);
+            """, connection, transaction);
         command.Parameters.AddWithValue(page.Keys);
         await command.ExecuteNonQueryAsync(cancellation);
+        await transaction.CommitAsync(cancellation);
         continuation = page.Continuation;
         // Bound each tick to one page; repeat full scans indefinitely, including after host restarts.
         nextReconciliation = continuation is null ? clock.GetUtcNow().AddMinutes(1) : clock.GetUtcNow();

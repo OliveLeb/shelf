@@ -58,6 +58,7 @@ public static class HttpEndpoints
         api.MapPost("/folders", async (FolderRequest input, HttpContext h) => Results.Json(await Db(h).CreateFolder(Current(h), input), statusCode: 201)).Produces<Element>(201).WithSummary("Create a folder");
         api.MapPost("/elements/{id:guid}/rename", async (Guid id, RenameRequest input, HttpContext h) => Results.Ok(await Db(h).Rename(Current(h), id, input))).Produces<Element>().WithSummary("Rename an element");
         api.MapPost("/elements/{id:guid}/move", async (Guid id, MoveRequest input, HttpContext h) => Results.Ok(await Db(h).Move(Current(h), id, input))).Produces<Element>().WithSummary("Move an element");
+        api.MapPost("/elements/{id:guid}/copy", async (Guid id, CopyRequest input, HttpContext h) => Results.Json(await Db(h).Copy(Current(h), id, input), statusCode: 201)).Produces<Element>(201).WithSummary("Copy an element");
         api.MapDelete("/elements/{id:guid}", async (Guid id, HttpContext h) => { await Db(h).Delete(Current(h), id); return Results.NoContent(); }).Produces(204).WithSummary("Move an element to its space trash");
         api.MapGet("/spaces/{space}/trash", async (string space, HttpContext h) => Results.Ok(await Db(h).Trash(Current(h), space))).Produces<List<TrashedElement>>().WithSummary("List a space trash");
         api.MapPost("/trash/{id:guid}/restore", async (Guid id, HttpContext h) => Results.Ok(await Db(h).Restore(Current(h), id))).Produces<Element>().WithSummary("Restore a trashed element");

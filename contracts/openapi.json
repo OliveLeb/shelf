@@ -1082,6 +1082,52 @@
         ]
       }
     },
+    "/elements/{id}/copy": {
+      "post": {
+        "tags": [
+          "Storage"
+        ],
+        "summary": "Copy an element",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CopyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Element"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
     "/elements/{id}": {
       "delete": {
         "tags": [
@@ -1284,6 +1330,24 @@
           },
           "username": {
             "type": "string"
+          }
+        }
+      },
+      "CopyRequest": {
+        "type": "object",
+        "properties": {
+          "parentId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "space": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },

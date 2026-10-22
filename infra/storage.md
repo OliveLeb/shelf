@@ -202,6 +202,40 @@ suffit en développement ; pour reproduire la restriction en local, démarrer
 MinIO avec `MINIO_API_CORS_ALLOW_ORIGIN=http://localhost:3000` (l'origine
 cliente locale).
 
+## Copies côté serveur
+
+La copie utilise `CopyObject`, ou `UploadPartCopy` au-delà de
+`Storage__S3__SingleCopyLimitBytes` (5 Gio par défaut). Régler cette limite
+selon le fournisseur ; `Storage__S3__CopyPartSizeBytes` vaut 128 Mio par défaut.
+Les deux réglages acceptent de 5 Mio à 5 Gio. Les permissions `GetObject`,
+`PutObject` et `AbortMultipartUpload` ci-dessus couvrent ces opérations.
+Les octets restent chez le fournisseur S3 ; prévoir l'espace occupé par une
+nouvelle copie complète et les coûts de requêtes correspondants.
+
+Configurer sur le bucket des fichiers une règle d'abandon des envois en plusieurs
+parties, pour les copies interrompues par un arrêt du processus. Exemple de règle
+à intégrer à la configuration de cycle de vie du fournisseur :
+
+```xml
+<Rule>
+  <ID>abort-abandoned-file-uploads</ID>
+  <Filter><Prefix>files/</Prefix></Filter>
+  <Status>Enabled</Status>
+  <AbortIncompleteMultipartUpload><DaysAfterInitiation>7</DaysAfterInitiation></AbortIncompleteMultipartUpload>
+</Rule>
+```
+
+Ne pas expirer les objets complets sous `files/` : cela supprimerait aussi les
+fichiers actifs. Le nettoyage d'une copie échouée est immédiat mais au mieux :
+une panne S3, un arrêt du processus ou un échec du commit PostgreSQL peut laisser
+des objets complets orphelins. Le balayage périodique les reprend dans la file
+persistante de suppression et attend la fin des copies avant de comparer les
+références en base. Pour une intervention manuelle, arrêter les écritures de l'API,
+comparer la liste du bucket aux clés référencées par `elements.object_key` **et**
+`uploads.object_key`, puis examiner les objets non référencés avant toute
+suppression. Ne pas supprimer d'objets à partir d'un instantané de base ancien
+ou pendant une copie en cours.
+
 ## Sauvegarde quotidienne de PostgreSQL
 
 PostgreSQL détient les noms, dossiers, espaces, partages et la corbeille ; le

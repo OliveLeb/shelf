@@ -7,6 +7,8 @@ public sealed record FolderRequest(string? Name, Guid? ParentId = null, string? 
 public sealed record RenameRequest(string? Name);
 /// <summary>Moves into a visible folder or a space root. Without Space or ParentId, stays in the current space. Personal elements may move to common, never the reverse.</summary>
 public sealed record MoveRequest(Guid? ParentId = null, string? Space = null);
+/// <summary>Copies into a writable folder or a space root (personal by default), recursively and without copying shares. Name conflicts are renamed automatically.</summary>
+public sealed record CopyRequest(Guid? ParentId = null, string? Space = null);
 public sealed record AccountSummary(Guid Id, string Username);
 /// <summary>A file or a folder; Size and ContentType are null for folders.</summary>
 public sealed record Element(Guid Id, string Kind, string Name, Guid? ParentId, long? Size, string? ContentType, DateTimeOffset AddedAt, AccountSummary? AddedBy);
