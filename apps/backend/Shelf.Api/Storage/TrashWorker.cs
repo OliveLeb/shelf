@@ -52,6 +52,7 @@ public sealed class TrashWorker(NpgsqlDataSource source, ObjectStore store, Time
             INSERT INTO object_deletions (object_key)
             SELECT object_key FROM unnest($1::text[]) AS objects(object_key)
             WHERE NOT EXISTS (SELECT 1 FROM elements e WHERE e.object_key=objects.object_key)
+              AND NOT EXISTS (SELECT 1 FROM elements e WHERE e.thumbnail_key=objects.object_key)
               AND NOT EXISTS (SELECT 1 FROM uploads u WHERE u.object_key=objects.object_key)
             ON CONFLICT DO NOTHING
             """, connection, transaction);

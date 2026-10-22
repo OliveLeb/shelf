@@ -1,7 +1,7 @@
 info:
   name: Create a folder
   type: http
-  seq: 12
+  seq: 14
   tags:
     - Storage
 
@@ -58,5 +58,6 @@ examples:
             "size": "",
             "contentType": "",
             "addedAt": "",
-            "addedBy": ""
+            "addedBy": "",
+            "thumbnailState": ""
           }

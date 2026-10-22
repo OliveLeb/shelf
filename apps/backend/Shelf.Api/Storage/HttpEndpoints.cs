@@ -56,6 +56,10 @@ public static class HttpEndpoints
         api.MapPost("/uploads/{id:guid}/complete", async (Guid id, HttpContext h) => Results.Json(await Db(h).Complete(Current(h), id), statusCode: 201)).Produces<Element>(201).WithSummary("Complete an upload")
             .WithDescription("Rechecks write access and uploaded size before publishing. A targeted replacement preserves file identity and shares; revoked, read-only or trashed targets cannot be replaced.");
         api.MapGet("/files/{id:guid}/download", async (Guid id, HttpContext h) => Results.Ok(await Db(h).Download(Current(h), id))).Produces<SignedUrl>().WithSummary("Get a download link");
+        api.MapGet("/files/{id:guid}/thumbnail", async (Guid id, HttpContext h) => Results.Ok(await Db(h).Thumbnail(Current(h), id))).Produces<ThumbnailResult>().WithSummary("Get a miniature state and link")
+            .WithDescription("Uses the file's read access. Link is null while pending or unavailable; generation failure never prevents downloading the file.");
+        api.MapGet("/files/{id:guid}/stream", async (Guid id, HttpContext h) => Results.Ok(await Db(h).StreamVideo(Current(h), id))).Produces<SignedUrl>().WithSummary("Get a video streaming link")
+            .WithDescription("Inline signed GET of the original video, with native S3 Range support and no transcoding. Request a fresh link after expiry; unsupported codecs remain downloadable.");
         api.MapGet("/folders/{id:guid}/elements", async (Guid id, string? sort, string? order, HttpContext h) => Results.Ok(await Db(h).Content(Current(h), id, sort, order))).Produces<List<Element>>().WithSummary("List a folder");
         api.MapPost("/folders", async (FolderRequest input, HttpContext h) => Results.Json(await Db(h).CreateFolder(Current(h), input), statusCode: 201)).Produces<Element>(201).WithSummary("Create a folder");
         api.MapPost("/elements/{id:guid}/rename", async (Guid id, RenameRequest input, HttpContext h) => Results.Ok(await Db(h).Rename(Current(h), id, input))).Produces<Element>().WithSummary("Rename an element");

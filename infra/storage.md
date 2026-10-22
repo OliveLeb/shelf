@@ -232,9 +232,67 @@ des objets complets orphelins. Le balayage périodique les reprend dans la file
 persistante de suppression et attend la fin des copies avant de comparer les
 références en base. Pour une intervention manuelle, arrêter les écritures de l'API,
 comparer la liste du bucket aux clés référencées par `elements.object_key` **et**
-`uploads.object_key`, puis examiner les objets non référencés avant toute
+`elements.thumbnail_key` et `uploads.object_key`, puis examiner les objets non référencés avant toute
 suppression. Ne pas supprimer d'objets à partir d'un instantané de base ancien
 ou pendant une copie en cours.
+
+## Miniatures sur le VPS
+
+Installer sur le même hôte que l’API (également dans son image si conteneurisée) :
+
+```sh
+sudo apt-get update
+sudo apt-get install --yes --no-install-recommends ffmpeg imagemagick libheif1
+ffmpeg -version
+convert -list format | grep HEIC
+```
+
+Le worker invoque `convert` (ImageMagick 6, ou commande compatible d’ImageMagick 7)
+et `ffmpeg` depuis le `PATH` du service. `HEIC` doit avoir le droit de lecture
+(`r`) dans la liste ; le build libheif doit décoder HEVC, pas seulement AVIF.
+Sur les distributions qui séparent les plugins HEVC, installer aussi le décodeur
+libheif HEVC fourni par la distribution (par exemple `libheif-plugin-libde265`
+sur Ubuntu 24.04). Vérifier un vrai HEIC avec les fichiers de test versionnés :
+
+```sh
+convert 'heic:apps/backend/Shelf.Api.Tests/Fixtures/photo.heic[0]' -thumbnail 320x320 /tmp/shelf-check.jpg
+identify /tmp/shelf-check.jpg
+rm /tmp/shelf-check.jpg
+```
+
+Prévoir un répertoire temporaire local inscriptible par l’utilisateur Unix de
+l’API et nettoyé après un arrêt brutal (par exemple `PrivateTmp=true` dans le
+service systemd). Une génération traite une source à la fois par processus API,
+avec un délai total de 60 secondes. Les photos sont copiées temporairement
+(512 Mio au maximum), redimensionnées avec limites mémoire/map/disque ImageMagick
+de 64/128/256 Mio, puis effacées. Les vidéos sont lues par ffmpeg directement sur
+le S3 via une URL signée et des requêtes partielles : aucun fichier vidéo complet
+n’est écrit sur le VPS. Réserver de la marge disque et mémoire et borner le
+service avec `MemoryMax`/quotas de disque selon la taille du VPS. Maintenir les
+décodeurs à jour : ils lisent du contenu fourni par les utilisateurs. Ils tournent
+sans shell ; les photos imposent le décodeur JPEG ou HEIC et la vidéo n’accepte
+que les conteneurs mov/MP4, Matroska/WebM, AVI, MPEG/TS et Ogg (pas les playlists).
+
+Le JPEG d’aperçu est un objet privé distinct sous `files/`, dans le bucket des
+fichiers. Aucune permission S3 supplémentaire n’est nécessaire. Les clés
+`elements.thumbnail_key` sont aussi des références à protéger lors d’un audit ou
+d’une restauration. La purge les inscrit dans la file durable de suppression,
+et le balayage récupère les objets créés tardivement après une purge ou un
+remplacement concurrent.
+
+Une panne de décodeur, un dépassement des limites ou un type non pris en charge
+donne `unavailable` sans boucle de relance ; cela ne bloque jamais le téléchargement
+ni la lecture de l’original. Une génération interrompue par la mort du processus
+est abandonnée après cinq minutes (horloge du serveur), sans nouvelle tentative.
+Surveiller `thumbnail_unavailable`, `thumbnail_database_retry` et
+`thumbnail_temp_cleanup_failed`, sans activer de journaux contenant les URL S3.
+Réparer les outils avant les nouveaux envois ; les échecs déjà marqués ne sont
+pas automatiquement régénérés.
+
+Pour la lecture navigateur, conserver le CORS `GET`/`Range` ci-dessus et vérifier
+que le fournisseur répond `206 Partial Content`. La route `/files/{id}/stream`
+sert une URL `inline` de l’original, sans transcodage ; la compatibilité des codecs
+et du conteneur dépend du lecteur. Après expiration, redemander une URL à l’API.
 
 ## Sauvegarde quotidienne de PostgreSQL
 

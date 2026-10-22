@@ -1,7 +1,7 @@
 info:
   name: Move an element to its space trash
   type: http
-  seq: 16
+  seq: 18
   tags:
     - Storage
 

@@ -1,7 +1,7 @@
 info:
   name: List a space trash
   type: http
-  seq: 17
+  seq: 19
   tags:
     - Storage
 
@@ -53,7 +53,8 @@ examples:
                 "size": "",
                 "contentType": "",
                 "addedAt": "",
-                "addedBy": ""
+                "addedBy": "",
+                "thumbnailState": ""
               },
               "originalParentId": "",
               "originalPath": "",

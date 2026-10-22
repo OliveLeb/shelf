@@ -44,8 +44,10 @@ public sealed partial class StorageTransaction
             WITH previous AS MATERIALIZED (SELECT * FROM elements WHERE id=$1),
             updated AS (UPDATE elements SET object_key=$3, size=$4, content_type=$5, added_at=$6, added_by=$7
                 WHERE id=$1 RETURNING id)
-            INSERT INTO elements (id, space_id, kind, name, size, content_type, object_key, added_at, added_by, trash_id)
-            SELECT $2, p.space_id, p.kind, p.name, p.size, p.content_type, p.object_key, p.added_at, p.added_by, $2
+            INSERT INTO elements (id, space_id, kind, name, size, content_type, object_key, added_at, added_by, trash_id, thumbnail_state, thumbnail_key)
+            SELECT $2, p.space_id, p.kind, p.name, p.size, p.content_type, p.object_key, p.added_at, p.added_by, $2,
+                CASE WHEN p.thumbnail_state='pending' THEN NULL ELSE p.thumbnail_state END,
+                CASE WHEN p.thumbnail_state='available' THEN p.thumbnail_key ELSE NULL END
             FROM previous p CROSS JOIN updated
             """, id, snapshot, key, size, contentType, clock.GetUtcNow(), account.Id);
         return await Get(id);
@@ -56,7 +58,7 @@ public sealed partial class StorageTransaction
         var spaceId = await Destination(account, null, space);
         return await Query("""
             SELECT e.id, e.kind, e.name, e.parent_id, e.size, e.content_type, e.added_at, a.id, a.username,
-                t.original_parent_id, t.original_path, t.deleted_at, d.id, d.username
+                t.original_parent_id, t.original_path, t.deleted_at, d.id, d.username, e.thumbnail_state
             FROM trash_entries t JOIN elements e ON e.id=t.id LEFT JOIN accounts a ON a.id=e.added_by
             LEFT JOIN accounts d ON d.id=t.deleted_by WHERE t.space_id=$1 ORDER BY t.deleted_at, t.id
             """, r => new TrashedElement(r.GetGuid(0), ReadElement(r), r.IsDBNull(9) ? null : r.GetGuid(9),

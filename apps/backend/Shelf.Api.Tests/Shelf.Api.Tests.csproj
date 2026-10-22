@@ -7,4 +7,7 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.1"><PrivateAssets>all</PrivateAssets></PackageReference>
     <ProjectReference Include="../Shelf.Api/Shelf.Api.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <None Update="Fixtures/*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

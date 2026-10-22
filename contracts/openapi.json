@@ -938,6 +938,80 @@
         ]
       }
     },
+    "/files/{id}/thumbnail": {
+      "get": {
+        "tags": [
+          "Storage"
+        ],
+        "summary": "Get a miniature state and link",
+        "description": "Uses the file's read access. Link is null while pending or unavailable; generation failure never prevents downloading the file.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThumbnailResult"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/files/{id}/stream": {
+      "get": {
+        "tags": [
+          "Storage"
+        ],
+        "summary": "Get a video streaming link",
+        "description": "Inline signed GET of the original video, with native S3 Range support and no transcoding. Request a fresh link after expiry; unsupported codecs remain downloadable.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignedUrl"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
     "/folders/{id}/elements": {
       "get": {
         "tags": [
@@ -1396,7 +1470,8 @@
           "size",
           "contentType",
           "addedAt",
-          "addedBy"
+          "addedBy",
+          "thumbnailState"
         ],
         "type": "object",
         "properties": {
@@ -1444,6 +1519,12 @@
               {
                 "$ref": "#/components/schemas/AccountSummary"
               }
+            ]
+          },
+          "thumbnailState": {
+            "type": [
+              "null",
+              "string"
             ]
           }
         }
@@ -1855,6 +1936,28 @@
           "expiresAt": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "ThumbnailResult": {
+        "required": [
+          "state",
+          "link"
+        ],
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string"
+          },
+          "link": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SignedUrl"
+              }
+            ]
           }
         }
       },
