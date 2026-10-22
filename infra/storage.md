@@ -91,6 +91,9 @@ par défaut). C'est le seul accès au contenu pour les clients
 - Ne pas activer le versionnement sur le bucket des fichiers : une version
   conservée survivrait à la purge de la corbeille et à la suppression d'un
   compte.
+- Réserver le préfixe `files/` à Shelf : la tâche de purge supprime les objets
+  sans référence dans PostgreSQL, y compris ceux déposés manuellement. Ne pas
+  partager ce préfixe avec une autre instance ou application.
 
 La clé de l'API ne reçoit que les opérations dont l'API a besoin sur ce bucket.
 Avec une politique au format IAM (AWS, MinIO et de nombreux fournisseurs) :
@@ -225,8 +228,9 @@ parties, pour les copies interrompues par un arrêt du processus. Exemple de rè
 Ne pas expirer les objets complets sous `files/` : cela supprimerait aussi les
 fichiers actifs. Le nettoyage d'une copie échouée est immédiat mais au mieux :
 une panne S3, un arrêt du processus ou un échec du commit PostgreSQL peut laisser
-des objets complets orphelins. Il n'existe pas encore de réconciliation
-automatique. Pour une intervention manuelle, arrêter les écritures de l'API,
+des objets complets orphelins. Le balayage périodique les reprend dans la file
+persistante de suppression et attend la fin des copies avant de comparer les
+références en base. Pour une intervention manuelle, arrêter les écritures de l'API,
 comparer la liste du bucket aux clés référencées par `elements.object_key` **et**
 `uploads.object_key`, puis examiner les objets non référencés avant toute
 suppression. Ne pas supprimer d'objets à partir d'un instantané de base ancien
@@ -386,7 +390,9 @@ clé d'administration S3 (la clé de sauvegarde ne peut pas lire).
 
 5. Appliquer les migrations de la version déployée, avec la configuration de
    l'API (`ConnectionStrings__Shelf`), sans risque si elles sont déjà
-   présentes, puis redémarrer l'API et le minuteur :
+   présentes. Avant de redémarrer l'API et le minuteur, copier le bucket à part
+   si l'on veut récupérer les fichiers envoyés après la sauvegarde : le balayage
+   les supprimera, faute de référence dans la base restaurée.
 
    ```sh
    dotnet Shelf.Api.dll migrate
@@ -395,9 +401,12 @@ clé d'administration S3 (la clé de sauvegarde ne peut pas lire).
 6. Vérifier qu'un utilisateur se connecte et télécharge un fichier connu.
 
 La restauration ramène la base à l'état de la sauvegarde, au plus un jour plus
-tôt. Les fichiers envoyés depuis restent dans le bucket sans nom ni dossier, et
-les fichiers purgés depuis apparaissent mais ne se téléchargent plus. Les
-comptes, sessions et liens actifs sont ceux de la sauvegarde.
+tôt. Les fichiers envoyés depuis n'ont plus de référence en base : le balayage
+des objets orphelins les supprimera après le redémarrage de l'API. Pour tenter
+de les récupérer, copier le bucket à part **avant de redémarrer l'API** ; cette
+copie ne restitue pas leurs noms et dossiers. Les fichiers purgés depuis la
+sauvegarde apparaissent mais ne se téléchargent plus. Les comptes, sessions et
+liens actifs sont ceux de la sauvegarde.
 
 La sauvegarde n'est pas testée automatiquement : rejouer cette procédure sur une
 base jetable après l'installation, puis à chaque changement de version majeure

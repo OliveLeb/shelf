@@ -231,4 +231,91 @@ public sealed class CopyTests : TestInstance
         Assert.Equal(folder, Id(Assert.Single(await Root(member))));
         Assert.Equal(before, (await S3.ListObjectsV2Async(new ListObjectsV2Request { BucketName = Bucket })).S3Objects.Select(o => o.Key).Order());
     }
+
+    [Fact]
+    public async Task Copy_into_a_write_shared_folder_belongs_to_its_owner_without_copying_source_grants()
+    {
+        var (_, sourceOwner) = await User("source");
+        var (_, destinationOwner) = await User("destination");
+        var (copierId, copier) = await User("copier");
+        var (readerId, reader) = await User("reader");
+        var source = Id(await Upload(sourceOwner, "shared.jpg"));
+        await Json(await sourceOwner.PutAsJsonAsync($"/elements/{source}/shares/{copierId}", new { level = "read" }));
+        await Json(await sourceOwner.PutAsJsonAsync($"/elements/{source}/shares/{readerId}", new { level = "read" }));
+        var folder = Id(await Json(await destinationOwner.PostAsJsonAsync("/folders", new { name = "Destination" })));
+        await Json(await destinationOwner.PutAsJsonAsync($"/elements/{folder}/shares/{copierId}", new { level = "write" }));
+        var copy = await Json(await copier.PostAsJsonAsync($"/elements/{source}/copy", new { parentId = folder }));
+        Assert.Equal(folder, copy.GetProperty("parentId").GetGuid());
+        Assert.Equal(copierId, copy.GetProperty("addedBy").GetProperty("id").GetGuid());
+        var grant = Assert.Single((await Json(await destinationOwner.GetAsync($"/elements/{Id(copy)}/shares"))).EnumerateArray());
+        Assert.Equal(folder, grant.GetProperty("elementId").GetGuid());
+        Assert.Equal(copierId, grant.GetProperty("recipient").GetProperty("id").GetGuid());
+        Assert.Equal(HttpStatusCode.NotFound, (await reader.GetAsync($"/files/{Id(copy)}/download")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await sourceOwner.GetAsync($"/files/{Id(copy)}/download")).StatusCode);
+        await destinationOwner.DeleteAsync($"/elements/{folder}/shares/{copierId}");
+        Assert.Equal(HttpStatusCode.NotFound, (await copier.GetAsync($"/files/{Id(copy)}/download")).StatusCode);
+        var link = await Json(await destinationOwner.GetAsync($"/files/{Id(copy)}/download"));
+        Assert.Equal(Photo, await Transfer.GetByteArrayAsync(link.GetProperty("url").GetString()));
+    }
+
+    [Fact]
+    public async Task Trash_is_not_copied_or_used_as_a_destination_and_purging_either_copy_preserves_the_other()
+    {
+        var (_, member) = await User();
+        var folder = Id(await Json(await member.PostAsJsonAsync("/folders", new { name = "Tree" })));
+        var removed = Id(await Upload(member, "removed.jpg", folder));
+        var kept = Id(await Upload(member, "kept.jpg", folder));
+        Assert.Equal(HttpStatusCode.NoContent, (await member.DeleteAsync($"/elements/{removed}")).StatusCode);
+        var copy = Id(await Json(await member.PostAsJsonAsync($"/elements/{folder}/copy", new { })));
+        var copiedFile = Assert.Single((await Json(await member.GetAsync($"/folders/{copy}/elements"))).EnumerateArray());
+        Assert.Equal("kept.jpg", copiedFile.GetProperty("name").GetString());
+        Assert.Equal(HttpStatusCode.NotFound, (await member.PostAsJsonAsync($"/elements/{removed}/copy", new { })).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await member.DeleteAsync($"/elements/{copy}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await member.PostAsJsonAsync($"/elements/{kept}/copy", new { parentId = copy })).StatusCode);
+        var replacement = Id(await Json(await member.PostAsJsonAsync($"/elements/{folder}/copy", new { })));
+        Assert.Equal("Tree (1)", (await Json(await member.GetAsync("/spaces/personal/elements"))).EnumerateArray().Single(e => Id(e) == replacement).GetProperty("name").GetString());
+        Assert.Equal(HttpStatusCode.NoContent, (await member.DeleteAsync($"/trash/{copy}")).StatusCode);
+        var originalLink = await Json(await member.GetAsync($"/files/{kept}/download"));
+        Assert.Equal(Photo, await Transfer.GetByteArrayAsync(originalLink.GetProperty("url").GetString()));
+        Assert.Equal(HttpStatusCode.NoContent, (await member.DeleteAsync($"/elements/{folder}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await member.DeleteAsync($"/trash/{folder}")).StatusCode);
+        var replacementFile = Assert.Single((await Json(await member.GetAsync($"/folders/{replacement}/elements"))).EnumerateArray());
+        var link = await Json(await member.GetAsync($"/files/{Id(replacementFile)}/download"));
+        Assert.Equal(Photo, await Transfer.GetByteArrayAsync(link.GetProperty("url").GetString()));
+    }
+
+    [Fact]
+    public async Task Reconciliation_during_a_slow_copy_does_not_delete_the_uncommitted_object()
+    {
+        var (_, member) = await User();
+        var source = Id(await Upload(member, "photo.jpg"));
+        // Delay publication after the real S3 copy completes, reproducing a slow database commit.
+        await Sql("""
+            CREATE FUNCTION slow_copy_commit() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN IF NEW.name='photo (1).jpg' THEN PERFORM pg_sleep(6); END IF; RETURN NEW; END; $$;
+            CREATE CONSTRAINT TRIGGER slow_copy_commit AFTER INSERT ON elements
+                DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION slow_copy_commit();
+            """);
+        var copying = member.PostAsJsonAsync($"/elements/{source}/copy", new { });
+        await Eventually(async () => (await S3.ListObjectsV2Async(new ListObjectsV2Request { BucketName = Bucket })).S3Objects.Count == 2);
+        const string orphan = "files/reconciliation-probe";
+        await S3.PutObjectAsync(new PutObjectRequest { BucketName = Bucket, Key = orphan, ContentBody = "orphan" });
+        Clock.Advance(TimeSpan.FromMinutes(2));
+        var copy = await Json(await copying);
+        // The probe disappearing proves that reconciliation and deletion actually ran, not just that time passed.
+        await Eventually(async () => !(await S3.ListObjectsV2Async(new ListObjectsV2Request { BucketName = Bucket })).S3Objects.Any(o => o.Key == orphan));
+        var link = await Json(await member.GetAsync($"/files/{Id(copy)}/download"));
+        Assert.Equal(Photo, await Transfer.GetByteArrayAsync(link.GetProperty("url").GetString()));
+    }
+
+    private static async Task Eventually(Func<Task<bool>> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(15);
+        do
+        {
+            if (await condition()) return;
+            await Task.Delay(100);
+        } while (DateTime.UtcNow < deadline);
+        Assert.Fail("Storage work did not complete within 15 seconds.");
+    }
 }

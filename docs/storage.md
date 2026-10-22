@@ -6,8 +6,11 @@ d’un fichier dans son **espace personnel**),
 [l’issue #5](https://github.com/OliveLeb/shelf/issues/5) (**dossiers**, renommage,
 déplacement et noms uniques) et [l’issue #8](https://github.com/OliveLeb/shelf/issues/8)
 (**espace commun**) et [l’issue #9](https://github.com/OliveLeb/shelf/issues/9)
-(**partages en Lecture** et **Partagés avec moi**), puis [l’issue #11](https://github.com/OliveLeb/shelf/issues/11)
-(**copie indépendante des éléments**). Le vocabulaire suit [`CONTEXT.md`](../CONTEXT.md).
+(**partages en Lecture** et **Partagés avec moi**), puis
+[l’issue #10](https://github.com/OliveLeb/shelf/issues/10) (**corbeille et purge**) et
+[l’issue #12](https://github.com/OliveLeb/shelf/issues/12) (**partages en Écriture**).
+L’[issue #11](https://github.com/OliveLeb/shelf/issues/11) ajoute la **copie indépendante des éléments**.
+Le vocabulaire suit [`CONTEXT.md`](../CONTEXT.md).
 
 Le contenu des fichiers vit dans un bucket compatible S3 privé et transite
 directement entre le client et le S3 par URL signées de courte durée
@@ -60,13 +63,18 @@ JSON avec `Cache-Control: no-store` et signalent les erreurs par
 | `POST /elements/{id}/rename` | `name` | 200, élément renommé |
 | `POST /elements/{id}/move` | `parentId` (dossier de destination ; `null` : racine), `space` | 200, élément déplacé |
 | `POST /elements/{id}/copy` | `parentId` (dossier de destination ; `null` : racine), `space` (personnel par défaut) | 201, nouvel élément, avec son nom définitif |
-| `POST /uploads` | `name`, `size`, `contentType` (défaut `application/octet-stream`), `parentId`, `onConflict`, `space` | 201, `{id, url, method, headers, expiresAt}` |
+| `POST /uploads` | `name`, `size`, `contentType` (défaut `application/octet-stream`), `parentId`, `onConflict`, `space` ; ou `replaceFileId`, `size`, `contentType` pour remplacer un fichier précis | 201, `{id, url, method, headers, expiresAt}` |
 | `POST /uploads/{id}/complete` | — | 201, fichier créé |
 | `GET /files/{id}/download` | — | 200, `{url, expiresAt}` |
-| `PUT /elements/{id}/shares/{recipientId}` | `level` (`read`) | 200, partage créé ou mis à jour |
+| `PUT /elements/{id}/shares/{recipientId}` | `level` (`read` ou `write`) | 200, partage créé ou mis à jour |
 | `GET /elements/{id}/shares` | — | 200, partages directs et hérités de l’élément, réservés au propriétaire |
 | `DELETE /elements/{id}/shares/{recipientId}` | — | 204, partage direct retiré |
 | `GET /shares/received` | — | 200, racines des partages reçus avec leur propriétaire et leur niveau |
+| `DELETE /elements/{id}` | — | 204, élément et contenu placés en corbeille |
+| `GET /spaces/{space}/trash` | — | 200, corbeille `personal` ou `common` |
+| `POST /trash/{id}/restore` | — | 200, élément restauré |
+| `DELETE /trash/{id}` | — | 204, élément purgé définitivement |
+| `DELETE /spaces/{space}/trash` | — | 204, corbeille vidée |
 
 Un élément contient `id`, `kind` (`file` ou `folder`), `name`, `parentId`
 (`null` à la racine), `size` et `contentType` (`null` pour un dossier), `addedAt`
@@ -89,8 +97,8 @@ si `space` est fourni, il doit correspondre à celui du dossier.
 Pour déplacer un élément personnel vers la racine commune, fournir
 `{ "space": "common" }` à `POST /elements/{id}/move`. Pour le placer dans un
 dossier commun, fournir son `parentId`, avec ou sans `space`. Seul le propriétaire
-de l’espace personnel peut effectuer ce transfert ; un tiers, administrateur
-compris, reçoit `404`.
+de l’espace personnel peut effectuer ce transfert ; un destinataire de partage
+reçoit `403`, un tiers sans accès (administrateur compris) reçoit `404`.
 
 Le transfert conserve les identifiants et toutes les métadonnées des descendants,
 sauf l’emplacement de l’élément déplacé et l’espace de son contenu. Les envois en
@@ -103,14 +111,14 @@ va à la racine de l’espace actuel de l’élément, donc à la racine commune
 élément commun. Les noms uniques, le tri et la politique `keepBoth` s’appliquent
 de la même façon dans les deux espaces.
 
-### Partages en Lecture
+### Partages en Lecture et en Écriture
 
 Seul le **propriétaire** d’un élément personnel peut créer, modifier, consulter
 ou retirer ses partages. `PUT /elements/{id}/shares/{recipientId}` accorde la
-Lecture à un autre compte actif. Le couple élément/destinataire est unique :
+Lecture (`read`) ou l’Écriture (`write`) à un autre compte actif. Le couple élément/destinataire est unique :
 répéter le `PUT` met à jour le niveau du partage sans le dupliquer. Le niveau
-est stocké et modifiable par cette même route ; seul `"read"` est accepté à ce
-stade. L’Écriture sera livrée par l’issue #12 et reste refusée ici.
+est stocké et modifiable par cette même route. La migration `008_write_shares`
+ajoute le niveau Écriture et les envois ciblant un fichier à remplacer.
 
 Un partage contient `elementId` (racine du partage), `recipient` (`{id, username}`)
 et `level`. La consultation par le propriétaire inclut les partages directs et
@@ -125,7 +133,8 @@ Les partages qui se chevauchent ne se réduisent pas entre eux : retirer celui
 d’un dossier laisse actif un éventuel partage direct sur un de ses fichiers.
 Le transfert vers l’espace commun retire les partages du sous-arbre transféré.
 
-`GET /shares/received` renvoie une liste de `{element, owner, level}`. `owner`
+`GET /shares/received` renvoie une liste de `{element, owner, level}` ; `level`
+est le droit effectif le plus élevé, partages hérités compris. `owner`
 contient l’identifiant et le nom du propriétaire, indépendamment de l’auteur de
 l’ajout. Seules les racines explicitement partagées apparaissent dans cette vue ;
 les descendants se parcourent avec `GET /folders/{id}/elements`. Un fichier
@@ -149,7 +158,7 @@ espace personnel**, même si la source est commune ou partagée. `space: "common
 sélectionne la racine commune ; `parentId` sélectionne un dossier où l’utilisateur
 peut ajouter. Un dossier visible en Lecture seule répond `403 write_forbidden` ;
 une source ou destination invisible répond `404`, administrateur compris.
-Les dossiers partagés en Écriture seront accessibles avec l’issue #12.
+Les dossiers partagés en Écriture sont aussi des destinations possibles.
 
 Un dossier est copié avec tous ses descendants, y compris les dossiers vides.
 Les nouveaux éléments ont de nouveaux identifiants, une date d’ajout courante
@@ -178,10 +187,36 @@ copie un instantané fini de l’arbre source, sans inclure les nouveaux éléme
 Configurer les délais du proxy pour les copies longues.
 
 En cas d’échec, la transaction est annulée, les objets déjà copiés sont supprimés
-au mieux et l’envoi en plusieurs parties est annulé. Un arrêt du processus,
-une panne S3 pendant le nettoyage ou un échec du commit PostgreSQL après la
-copie peut laisser des objets orphelins : voir les
+au mieux et l’envoi en plusieurs parties est annulé. Le balayage des objets
+orphelins attend la fin des copies en cours avant de comparer les références
+PostgreSQL : il ne supprime pas une copie dont la transaction n’est pas encore
+validée. Après un arrêt du processus ou un échec du nettoyage immédiat, ce
+balayage reprend les objets sans référence. Voir les
 [précautions d’exploitation](../infra/storage.md#copies-côté-serveur).
+
+### Écriture sur les éléments partagés
+
+En Écriture, le destinataire crée des dossiers, envoie, remplace, renomme,
+déplace et supprime les éléments à l’intérieur d’un dossier partagé. Les ajouts
+appartiennent au propriétaire de l’espace, même si `addedBy` désigne le
+destinataire. Une suppression rejoint la corbeille du propriétaire, que lui seul
+peut restaurer. Sur un fichier partagé isolément, l’Écriture autorise le
+remplacement de son contenu, sans donner accès au dossier parent.
+
+La racine de tout partage reste sous le seul contrôle du propriétaire : un
+destinataire ne peut ni la renommer, ni la déplacer, ni la supprimer (`403`).
+Déplacer ou supprimer un dossier contenant une autre racine partagée est aussi
+refusé : cela ne doit pas contourner cette protection. Un partage en Lecture
+ne réduit jamais une Écriture héritée ; inversement, une Écriture directe sur
+un fichier prévaut sur la Lecture de son dossier.
+
+Un destinataire peut déplacer les éléments non protégés entre deux dossiers
+du même propriétaire si la source et la destination lui accordent l’Écriture.
+Une destination en Lecture seule est refusée. Il ne peut jamais déplacer un
+élément vers son espace personnel, l’espace d’un autre propriétaire ou l’espace
+commun. Les changements de partage, confirmations et déplacements sont
+sérialisés avec les écritures sur l’espace concerné, y compris quand le
+destinataire n’en est pas le propriétaire.
 
 ### Dossiers
 
@@ -224,8 +259,81 @@ fichier est renommé automatiquement à la confirmation : `photo.jpg` devient
 `photo (1).jpg`, puis `photo (2).jpg`… Le nom définitif figure dans la réponse
 de la confirmation.
 
+Avec `"onConflict": "replace"`, la confirmation conserve l’identifiant, le nom
+et les partages du fichier existant et en remplace les octets, la taille, le type,
+la date et l’auteur de l’ajout. L’ancien contenu devient un élément distinct,
+sans partage, dans la corbeille du même espace. La déclaration et un transfert
+incomplet ne modifient jamais le fichier existant. Si le nom est libre à la
+confirmation, un nouveau fichier est créé ; un dossier du même nom reste un
+conflit `409`. Les noms sont revérifiés à la confirmation, sous le même verrou
+que les suppressions, restaurations et déplacements.
+
+Pour remplacer un fichier partagé sans droit d’ajout dans son dossier, fournir
+`{ "replaceFileId": "<id>", "size": 123, "contentType": "image/jpeg" }`
+à `POST /uploads`, sans `name`, `parentId`, `space` ni `onConflict`. Le fichier
+est ciblé par son identifiant : un renommage ou déplacement par le propriétaire
+avant confirmation ne fait jamais remplacer un autre fichier ni créer un ajout.
+Le destinataire doit conserver l’Écriture sur ce fichier lors de la déclaration
+et de la confirmation. Un retrait de partage, une rétrogradation en Lecture ou
+un passage en corbeille empêche la confirmation. Les mêmes revérifications
+s’appliquent aux ajouts dans les dossiers partagés.
+
 Le bucket doit autoriser le CORS de l’origine cliente pour les transferts depuis
 un navigateur : voir [la règle CORS](../infra/storage.md#cors-du-bucket-des-fichiers).
+
+### Corbeille et purge
+
+La migration `007_trash` ajoute la corbeille et la file persistante de suppression
+S3. `DELETE /elements/{id}` conserve un instantané du sous-arbre, sa date de
+suppression, son auteur et son emplacement d’origine. Le nom redevient disponible
+dans le dossier. Le sous-arbre disparaît des dossiers, du téléchargement et de
+**Partagés avec moi** ; ses partages sont conservés mais inactifs. Les nouvelles
+écritures et confirmations d’envoi dans ses dossiers répondent `404`.
+
+Une entrée de corbeille contient `id`, `element`, `originalParentId`,
+`originalPath` (chemin du dossier parent au moment de la suppression), `deletedAt`
+et `deletedBy` (`{id, username}`, ou `null` si le compte n’existe plus).
+Seul le propriétaire gère sa corbeille personnelle ; les destinataires de
+partages et les administrateurs ne peuvent pas y accéder. Tout utilisateur actif
+peut consulter, restaurer, purger ou vider la corbeille commune.
+
+La restauration est possible strictement avant `deletedAt + 30 jours`. Elle
+replace le sous-arbre dans le dossier d’origine s’il existe, reste actif et
+appartient toujours au même espace ; sinon elle le replace à la racine de cet
+espace. Un nom pris provoque le même renommage que `keepBoth`. Les éléments déjà
+supprimés séparément ne font pas partie de l’instantané d’un dossier supprimé
+ensuite. Restaurer ce dossier ne les restaure pas implicitement.
+
+La purge anticipée, le vidage et l’expiration suppriment les métadonnées et
+inscrivent les clés S3 à supprimer **dans la même transaction PostgreSQL**, par
+des déclencheurs de suppression. Les objets des envois en cours emportés par un
+dossier purgé sont également inscrits. La confirmation d’un envoi transfère sa
+clé au fichier avant de supprimer l’envoi : elle ne programme pas sa suppression.
+
+Une tâche hébergée dans chaque serveur HTTP vérifie l’expiration toutes les
+secondes puis traite jusqu’à 100 suppressions S3. Plusieurs serveurs se
+répartissent la file avec `FOR UPDATE SKIP LOCKED`. Une panne S3 conserve la
+clé, avec une nouvelle tentative après 30 secondes puis un délai exponentiel
+plafonné à une heure. Le redémarrage reprend la file PostgreSQL. Une panne
+après la suppression S3 mais avant le commit répète un `DELETE` idempotent.
+La réponse `204` garantit donc la purge des métadonnées et l’enregistrement du
+travail S3 ; l’effacement physique suit en tâche de fond, sans dépendre de la
+disponibilité immédiate du fournisseur. Les journaux `object_deletion_retry` et
+`storage_cleanup_database_retry` signalent les reprises sans exposer de secret.
+
+Une ancienne URL d’envoi peut recréer un objet déjà purgé, même si l’envoi
+commencé avant son expiration se termine après. La tâche compare donc aussi
+les objets du préfixe `files/` aux fichiers (corbeille comprise) et aux envois
+en cours, dans un même instantané PostgreSQL. Les clés sans référence rejoignent
+la même file persistante. Le balayage traite au plus une page de 1 000 clés par
+seconde, recommence une minute après la fin et repart du début au redémarrage.
+Une panne de liste produit `object_reconciliation_retry`, sans empêcher le
+traitement de la file existante. Le préfixe `files/` est réservé à Shelf : toute
+écriture doit réserver sa clé en base avant d’envoyer les octets ; la confirmation
+transfère cette référence au fichier dans une transaction unique.
+
+Le bucket doit rester sans versionnement, comme indiqué dans le guide
+d’exploitation. Les miniatures seront intégrées au même mécanisme par #13.
 
 ### Téléchargement
 
@@ -240,18 +348,20 @@ selon RFC 5987). Les requêtes partielles (`Range`) sont prises en charge par le
 | 400 | `invalid_name` | Nom vide, de plus de 255 caractères, `.`/`..`, avec `/`, `\` ou caractère de contrôle |
 | 400 | `invalid_size` | Taille absente ou négative |
 | 400 | `invalid_content_type` | Type de contenu invalide |
-| 400 | `invalid_conflict_policy` | `onConflict` autre que `keepBoth` |
-| 400 | `invalid_share_level` | Niveau autre que `read` (y compris absent) |
+| 400 | `invalid_conflict_policy` | `onConflict` autre que `keepBoth` ou `replace` |
+| 400 | `invalid_upload_destination` | `replaceFileId` combiné avec `name`, `parentId`, `space` ou `onConflict` |
+| 400 | `invalid_share_level` | Niveau autre que `read` ou `write` (y compris absent) |
 | 400 | `invalid_recipient` | Destinataire inexistant, désactivé ou identique au propriétaire |
 | 400 | `invalid_space` | `space` autre que `personal` ou `common` |
 | 400 | `invalid_sort`, `invalid_order` | `sort` ou `order` inconnu |
 | 401 | `authentication_required` | Session absente, expirée ou compte désactivé |
-| 403 | `write_forbidden` | Écriture sur un élément ou dans un dossier partagé en Lecture |
+| 403 | `write_forbidden` | Écriture en Lecture seule, modification d’une racine partagée ou déplacement interdit hors de l’espace du propriétaire |
 | 403 | `sharing_forbidden` | Gestion des partages par un destinataire ou sur un élément commun |
 | 403 | `common_to_personal_forbidden` | Déplacement d’un élément commun vers un espace personnel |
 | 404 | `upload_not_found` | Envoi inconnu, déjà confirmé ou déclaré par un autre utilisateur |
 | 404 | `element_not_found` | Élément inexistant ou invisible pour l’utilisateur (ou dossier passé au téléchargement) |
 | 404 | `folder_not_found` | Dossier parent, de destination ou listé inexistant, invisible, qui est un fichier ou ne correspond pas à `space` |
+| 404 | `trash_not_found` | Entrée de corbeille inexistante, inaccessible ou expirée lors d’une restauration |
 | 409 | `upload_incomplete` | Objet absent du bucket à la confirmation ; envoyer puis confirmer de nouveau |
 | 409 | `size_mismatch` | Taille de l’objet différente de la déclaration ; renvoyer le contenu puis confirmer de nouveau |
 | 409 | `name_conflict` | Un élément du même nom, sans tenir compte de la casse, existe déjà dans le dossier |
@@ -265,8 +375,8 @@ accès au contenu.
 
 ## Limites actuelles
 
-Les partages en Écriture, la corbeille, l’envoi en plusieurs
-parties, l’expiration des envois abandonnés, la politique « remplacer », les miniatures et la purge des
-objets à la suppression d’un compte sont livrés par les autres sous-issues de #3.
-En attendant #15, la suppression d’un compte efface ses métadonnées de stockage
-mais laisse ses objets dans le bucket.
+L’envoi en plusieurs parties, l’expiration des envois
+abandonnés et les miniatures restent livrés par les autres sous-issues de #3.
+La file de suppression reçoit aussi les objets effacés par cascade lors de la
+suppression d’un compte ; la validation complète du cycle de vie des comptes et
+sa documentation d’authentification relèvent de #15.

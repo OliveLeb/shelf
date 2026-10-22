@@ -39,6 +39,7 @@ public abstract class TestInstance : IAsyncLifetime
     private readonly string databaseName = "shelf_test_" + Guid.NewGuid().ToString("N");
     private string connectionString = "";
     private string adminConnection = "";
+    private Func<WebApplicationFactory<Program>> createApp = null!;
 
     public async Task InitializeAsync()
     {
@@ -59,7 +60,7 @@ public abstract class TestInstance : IAsyncLifetime
         var s3AccessKey = Environment.GetEnvironmentVariable("SHELF_TEST_S3_ACCESS_KEY") ?? "shelf";
         S3 = new AmazonS3Client(s3AccessKey, S3SecretKey, new AmazonS3Config { ServiceURL = s3Endpoint, ForcePathStyle = true, AuthenticationRegion = "us-east-1" });
         await S3.PutBucketAsync(Bucket);
-        App = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        createApp = () => new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
             builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
             {
@@ -76,6 +77,18 @@ public abstract class TestInstance : IAsyncLifetime
             builder.ConfigureServices(services => services.AddSingleton<TimeProvider>(Clock));
             builder.ConfigureLogging(logging => logging.ClearProviders().AddProvider(Logs));
         });
+        App = createApp();
+        Client = App.CreateClient();
+        Admin = await SignIn("owner");
+    }
+
+    protected async Task RestartApp(Action<IWebHostBuilder>? configure = null)
+    {
+        Admin.Dispose();
+        Client.Dispose();
+        await App.DisposeAsync();
+        App = createApp();
+        if (configure is not null) App = App.WithWebHostBuilder(configure);
         Client = App.CreateClient();
         Admin = await SignIn("owner");
     }

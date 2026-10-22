@@ -619,6 +619,7 @@
           "Storage"
         ],
         "summary": "Set a share's level",
+        "description": "Only the owner may grant read or write. Write permits editing contents, not renaming, moving or deleting a shared root. Overlapping grants use the highest level.",
         "parameters": [
           {
             "name": "id",
@@ -798,6 +799,7 @@
           "Storage"
         ],
         "summary": "Declare an upload",
+        "description": "Requires write access to the destination. To replace a specific writable file, including a shared file with a hidden parent, send replaceFileId, size and contentType without name, parentId, space or onConflict. Old content goes to the owner's trash at confirmation.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -833,6 +835,7 @@
           "Storage"
         ],
         "summary": "Complete an upload",
+        "description": "Rechecks write access and uploaded size before publishing. A targeted replacement preserves file identity and shares; revoked, read-only or trashed targets cannot be replaced.",
         "parameters": [
           {
             "name": "id",
@@ -1116,6 +1119,164 @@
                 }
               }
             }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/elements/{id}": {
+      "delete": {
+        "tags": [
+          "Storage"
+        ],
+        "summary": "Move an element to its space trash",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/spaces/{space}/trash": {
+      "get": {
+        "tags": [
+          "Storage"
+        ],
+        "summary": "List a space trash",
+        "parameters": [
+          {
+            "name": "space",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TrashedElement"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Storage"
+        ],
+        "summary": "Empty a space trash",
+        "parameters": [
+          {
+            "name": "space",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/trash/{id}/restore": {
+      "post": {
+        "tags": [
+          "Storage"
+        ],
+        "summary": "Restore a trashed element",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Element"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/trash/{id}": {
+      "delete": {
+        "tags": [
+          "Storage"
+        ],
+        "summary": "Permanently purge a trashed element",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
           }
         },
         "security": [
@@ -1661,6 +1822,50 @@
           }
         }
       },
+      "TrashedElement": {
+        "required": [
+          "id",
+          "element",
+          "originalParentId",
+          "originalPath",
+          "deletedAt",
+          "deletedBy"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "element": {
+            "$ref": "#/components/schemas/Element"
+          },
+          "originalParentId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "originalPath": {
+            "type": "string"
+          },
+          "deletedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deletedBy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AccountSummary"
+              }
+            ]
+          }
+        }
+      },
       "UploadRequest": {
         "required": [
           "name",
@@ -1708,6 +1913,13 @@
               "null",
               "string"
             ]
+          },
+          "replaceFileId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
           }
         }
       },

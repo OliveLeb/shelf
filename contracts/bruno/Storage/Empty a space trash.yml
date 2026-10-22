@@ -1,0 +1,41 @@
+info:
+  name: Empty a space trash
+  type: http
+  seq: 17
+  tags:
+    - Storage
+
+http:
+  method: DELETE
+  url: "{{baseUrl}}/spaces/:space/trash"
+  params:
+    - name: space
+      value: ""
+      type: path
+  auth:
+    type: bearer
+    token: "{{token}}"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+examples:
+  - name: 204 Response
+    description: No Content
+    request:
+      url: "{{baseUrl}}/spaces/:space/trash"
+      method: DELETE
+      params:
+        - name: space
+          value: ""
+          type: path
+    response:
+      status: 204
+      statusText: No Content
+      body:
+        type: text
+        data: ""

@@ -98,7 +98,7 @@ public sealed class FolderTests : TestInstance
         await Upload(member, "late.jpg");
         Assert.Equal("late (1).jpg", (await Json(await Confirm(member, late))).GetProperty("name").GetString());
 
-        Assert.Equal("invalid_conflict_policy", await Error(await member.PostAsJsonAsync("/uploads", new { name = "photo.jpg", size = 1, onConflict = "replace" })));
+        Assert.Equal("invalid_conflict_policy", await Error(await member.PostAsJsonAsync("/uploads", new { name = "photo.jpg", size = 1, onConflict = "unknown" })));
     }
 
     [Fact]

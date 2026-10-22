@@ -6,7 +6,8 @@ using Shelf.Api.Storage;
 var command = args.FirstOrDefault() is "migrate" or "admin";
 var builder = WebApplication.CreateBuilder(command ? [] : args);
 // Build-time OpenAPI generation (contracts/openapi.json) starts the app without deployment configuration.
-if (System.Reflection.Assembly.GetEntryAssembly()?.GetName().Name == "GetDocument.Insider")
+var generatingContract = System.Reflection.Assembly.GetEntryAssembly()?.GetName().Name == "GetDocument.Insider";
+if (generatingContract)
 {
     builder.Configuration["Authentication:ClientOrigin"] ??= "http://localhost";
     builder.Configuration["Storage:S3:Endpoint"] ??= "http://localhost";
@@ -36,6 +37,7 @@ builder.Services.AddOpenApi(options =>
 });
 builder.AddAuthenticationBackend();
 builder.AddStorageBackend();
+if (!command && !generatingContract) builder.Services.AddHostedService<TrashWorker>();
 var app = builder.Build();
 if (command)
 {
