@@ -28,7 +28,7 @@ public static class HttpEndpoints
                 await using var connection = await http.RequestServices.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync(http.RequestAborted);
                 await using var transaction = await connection.BeginTransactionAsync(http.RequestAborted);
                 // Storage authenticates in its own transaction, without the account operations' advisory lock.
-                var actor = await new AuthTransaction(connection, transaction, clock, http.RequestAborted).Authenticate(http.Request.Headers.Authorization, admin: false);
+                var actor = await new AuthTransaction(connection, transaction, clock, http.RequestAborted).Authenticate(http.Request.Headers.Authorization, admin: false, accountMutation: false);
                 http.Items[typeof(Account)] = actor.Account;
                 http.Items[typeof(StorageTransaction)] = new StorageTransaction(connection, transaction, store, clock, http.RequestAborted);
                 var result = await next(context);

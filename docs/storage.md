@@ -432,6 +432,9 @@ accès au contenu.
 ## Limites actuelles
 
 Les miniatures restent livrées par les autres sous-issues de #3.
-La file de suppression reçoit aussi les objets effacés par cascade lors de la
-suppression d’un compte ; la validation complète du cycle de vie des comptes et
-sa documentation d’authentification relèvent de #15.
+Le cycle de vie des comptes est vérifié par l’[issue #15](https://github.com/OliveLeb/shelf/issues/15) :
+la suppression purge l’espace personnel et sa corbeille via la file persistante,
+retire les partages et anonymise les auteurs du contenu conservé ; la désactivation
+conserve les contenus et l’accès des destinataires de partages.
+Voir [la suppression et le stockage](authentication.md#suppression-et-stockage),
+notamment le nettoyage différé des envois non confirmés.
