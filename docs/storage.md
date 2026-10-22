@@ -166,5 +166,6 @@ administrateur : le rôle administrateur ne donne aucun accès au contenu.
 
 L’espace commun, les partages, la corbeille, la politique « remplacer », les miniatures et la purge des
 objets à la suppression d’un compte sont livrés par les autres sous-issues de #3.
-En attendant #15, la suppression d’un compte efface ses métadonnées de stockage
-mais laisse ses objets dans le bucket.
+En attendant #15, la suppression d’un compte laisse dans le bucket les objets
+des fichiers déjà confirmés. Ses envois non confirmés restent suivis pour être
+purgés à expiration.

@@ -11,8 +11,6 @@ public sealed class MultipartUploadTests : TestInstance
     // Three parts with the 5 MiB test part size: two full parts and a shorter last one.
     private static readonly byte[] Video = Random.Shared.GetItems(Enumerable.Range(0, 256).Select(b => (byte)b).ToArray(), 11 * MiB);
 
-    private static async Task<string?> Error(HttpResponseMessage response) =>
-        (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString();
     private static int[] Numbers(JsonElement upload) => [.. upload.GetProperty("parts").EnumerateArray().Select(p => p.GetProperty("number").GetInt32())];
     private static Task<HttpResponseMessage> Resume(HttpClient client, JsonElement upload) => client.GetAsync($"/uploads/{upload.GetProperty("id").GetGuid()}");
     private async Task<string[]> PendingMultipartUploads() => [.. ((await S3.ListMultipartUploadsAsync(Bucket)).MultipartUploads ?? []).Select(u => u.Key)];
@@ -150,7 +148,7 @@ public sealed class MultipartUploadTests : TestInstance
         var simple = await Declare(member, "photo.jpg", 10);
         await Put(simple, Video[..10]);
 
-        // The personal space, the only destination for now, disappears with its account.
+        // Deleting the account also deletes its personal space.
         Assert.Equal(HttpStatusCode.NoContent, (await Admin.DeleteAsync($"/admin/accounts/{memberId}")).StatusCode);
 
         Assert.Equal(HttpStatusCode.Unauthorized, (await Confirm(member, large)).StatusCode);
@@ -162,4 +160,56 @@ public sealed class MultipartUploadTests : TestInstance
         Clock.Advance(TimeSpan.FromHours(24));
         await Eventually(async () => (await PendingMultipartUploads()).Length == 0 && (await Objects()).Length == 0);
     }
+
+    [Fact]
+    public async Task Multipart_upload_resumes_in_its_folder_and_keeps_both_names_on_confirmation()
+    {
+        var (_, member) = await User();
+        var folder = Id(await Json(await member.PostAsJsonAsync("/folders", new { name = "Videos" })));
+        await Upload(member, "holiday.mp4", folder);
+        var upload = await Declare(member, "holiday.mp4", Video.Length, "video/mp4", folder, "keepBoth");
+        await Put(upload, Video, 1, 3);
+        var resumed = await Json(await Resume(member, upload));
+        Assert.Equal([2], Numbers(resumed));
+        await Put(resumed, Video);
+
+        var file = await Json(await Confirm(member, upload));
+        Assert.Equal("holiday (1).mp4", file.GetProperty("name").GetString());
+        Assert.Equal(folder, file.GetProperty("parentId").GetGuid());
+        var children = (await Json(await member.GetAsync($"/folders/{folder}/elements"))).EnumerateArray().ToArray();
+        Assert.Equal(2, children.Length);
+        Assert.Equal("folder", Assert.Single(await Root(member)).GetProperty("kind").GetString());
+        var download = await Json(await member.GetAsync($"/files/{Id(file)}/download"));
+        Assert.Equal(Video, await (await Transfer.GetAsync(download.GetProperty("url").GetString())).Content.ReadAsByteArrayAsync());
+    }
+
+    [Fact]
+    public async Task Deleted_folder_prevents_confirmation_and_its_pending_objects_are_purged_at_expiry()
+    {
+        var (_, member) = await User();
+        var folder = Id(await Json(await member.PostAsJsonAsync("/folders", new { name = "Videos" })));
+        var large = await Declare(member, "holiday.mp4", Video.Length, "video/mp4", folder);
+        await Put(large, Video, 1);
+        var simple = await Declare(member, "photo.jpg", 10, parentId: folder);
+        await Put(simple, Video[..10]);
+        // Folder deletion has no HTTP endpoint yet; remove the destination as test setup.
+        await Sql("DELETE FROM elements WHERE id=$1", folder);
+
+        Assert.Empty(await Root(member)); // The account and its session remain active.
+        Assert.Equal(HttpStatusCode.NotFound, (await member.GetAsync($"/folders/{folder}/elements")).StatusCode);
+        foreach (var upload in new[] { large, simple })
+        {
+            Assert.Equal(HttpStatusCode.NotFound, (await Resume(member, upload)).StatusCode);
+            var confirmation = await Confirm(member, upload);
+            Assert.Equal(HttpStatusCode.NotFound, confirmation.StatusCode);
+            Assert.Equal("upload_not_found", await Error(confirmation));
+        }
+        await Task.Delay(500);
+        Assert.Single(await PendingMultipartUploads());
+        Assert.Single(await Objects());
+        Clock.Advance(TimeSpan.FromHours(24));
+        await Eventually(async () => (await PendingMultipartUploads()).Length == 0 && (await Objects()).Length == 0);
+        Assert.Empty(await Root(member));
+    }
+
 }
