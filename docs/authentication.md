@@ -171,11 +171,38 @@ désactivation conserve son compte, ses identifiants et les métadonnées associ
 Toute suppression, désactivation ou rétrogradation qui retirerait le dernier
 administrateur actif est refusée, même par commande serveur ou en concurrence.
 
-Une suppression efface les métadonnées de l’espace personnel. Les éléments
-ajoutés dans l’espace commun, y compris ceux transférés depuis l’espace personnel,
-sont conservés ; leur auteur devient anonyme (`addedBy: null`). Une désactivation
-conserve les deux espaces et leurs contenus, mais retire l’accès du compte.
+Une suppression volontaire ou administrative efface définitivement l’espace
+personnel, sa corbeille et tous ses éléments, quel que soit l’auteur de leur
+ajout. Les partages accordés et reçus disparaissent. Les clés des objets S3 à
+effacer sont enregistrées dans la même transaction PostgreSQL ; la tâche de
+purge les supprime avec reprise après panne S3 ou redémarrage. La réponse `204`
+confirme la suppression des métadonnées et la programmation durable du travail,
+pas la fin de l’effacement physique. Voir [la purge du stockage](storage.md#corbeille-et-purge).
 
-La purge physique des objets S3 de l’espace personnel lors de la suppression
-d’un compte reste à livrer par l’issue #15. Actuellement ces objets restent dans
-le bucket ; voir [les limites du stockage](storage.md#limites-actuelles).
+Les éléments ajoutés dans l’espace commun, y compris ceux transférés depuis
+l’espace personnel, sont conservés ; leur auteur devient anonyme (`addedBy: null`).
+Les contributions du compte dans l’espace personnel d’un autre propriétaire
+restent aussi dans cet espace, avec un auteur anonyme.
+
+Une désactivation conserve l’espace personnel, sa corbeille, ses objets et ses
+partages. Les destinataires gardent leurs droits de Lecture ou d’Écriture ;
+seul le compte désactivé perd son propre accès. Les règles ordinaires d’expiration
+de la corbeille et des envois continuent de s’appliquer.
+
+L’authentification du stockage prend un verrou partagé sur la ligne du compte
+avant de renouveler sa session, sans prendre le verrou consultatif global des
+opérations de compte. Les opérations d’authentification prennent d’abord un
+verrou exclusif sur leur compte pour éviter une conversion de verrou après
+avoir verrouillé la session. Une suppression ou désactivation qui détient déjà
+le verrou du compte fait attendre puis refuser une confirmation d’envoi (`401`).
+Si l’opération de stockage est autorisée la première, elle termine avant la
+suppression ou désactivation ; une suppression purge alors aussi ses ajouts
+personnels. Aucun envoi ne peut être publié au nom du compte après son effacement.
+
+Les envois non confirmés survivent en base pour le nettoyage : à leur expiration
+configurée, leurs objets sont supprimés et leurs envois multipart annulés, avec
+reprise en cas de panne. Ce délai empêche les URL signées déjà délivrées de
+recréer immédiatement des objets après leur purge. Le balayage des orphelins
+reprend aussi les transferts tardifs terminés après expiration. Ces règles sont
+vérifiées par les routes existantes de suppression et désactivation, avec
+PostgreSQL et un bucket MinIO réels, panne S3 et redémarrage compris.

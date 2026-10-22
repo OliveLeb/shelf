@@ -546,6 +546,105 @@
         ]
       }
     },
+    "/elements/search": {
+      "get": {
+        "tags": [
+          "Storage"
+        ],
+        "summary": "Search visible elements by name",
+        "description": "Case-insensitive literal substring (1–255 characters, not whitespace-only). Includes personal, common and received shared elements, without trash or duplicates.",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Element"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/storage/usage": {
+      "get": {
+        "tags": [
+          "Storage"
+        ],
+        "summary": "Get personal and common storage usage",
+        "description": "Confirmed file bytes including trash, excluding pending uploads and thumbnails. No quota is applied.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageUsage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
+    "/admin/storage/usage": {
+      "get": {
+        "tags": [
+          "Storage"
+        ],
+        "summary": "Get storage usage per account",
+        "description": "Administrator only. Returns account identity and personal-space file bytes including trash, without content metadata. Includes empty and disabled accounts; excludes common-space bytes.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AccountStorageUsage"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
     "/shares/received": {
       "get": {
         "tags": [
@@ -1427,6 +1526,26 @@
           }
         }
       },
+      "AccountStorageUsage": {
+        "required": [
+          "account",
+          "bytes"
+        ],
+        "type": "object",
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/AccountSummary"
+          },
+          "bytes": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          }
+        }
+      },
       "AccountSummary": {
         "required": [
           "id",
@@ -1936,6 +2055,31 @@
           "expiresAt": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "StorageUsage": {
+        "required": [
+          "personalBytes",
+          "commonBytes"
+        ],
+        "type": "object",
+        "properties": {
+          "personalBytes": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "commonBytes": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
           }
         }
       },

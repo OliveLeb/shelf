@@ -28,7 +28,7 @@ public static class HttpEndpoints
                 await using var connection = await http.RequestServices.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync(http.RequestAborted);
                 await using var transaction = await connection.BeginTransactionAsync(http.RequestAborted);
                 // Storage authenticates in its own transaction, without the account operations' advisory lock.
-                var actor = await new AuthTransaction(connection, transaction, clock, http.RequestAborted).Authenticate(http.Request.Headers.Authorization, admin: false);
+                var actor = await new AuthTransaction(connection, transaction, clock, http.RequestAborted).Authenticate(http.Request.Headers.Authorization, admin: false, accountMutation: false);
                 http.Items[typeof(Account)] = actor.Account;
                 http.Items[typeof(StorageTransaction)] = new StorageTransaction(connection, transaction, store, clock, http.RequestAborted);
                 var result = await next(context);
@@ -43,6 +43,17 @@ public static class HttpEndpoints
             catch (Amazon.Runtime.AmazonServiceException) { return Results.Json(new { error = "storage_unavailable" }, statusCode: 503); }
         });
 
+        api.MapGet("/elements/search", async (string? query, HttpContext h) => TypedResults.Ok(await Db(h).Search(Current(h), query)))
+            .WithSummary("Search visible elements by name")
+            .WithDescription("Case-insensitive literal substring (1–255 characters, not whitespace-only). Includes personal, common and received shared elements, without trash or duplicates.")
+            .Produces(400);
+        api.MapGet("/storage/usage", (Delegate)(async (HttpContext h) => TypedResults.Ok(await Db(h).Usage(Current(h)))))
+            .WithSummary("Get personal and common storage usage")
+            .WithDescription("Confirmed file bytes including trash, excluding pending uploads and thumbnails. No quota is applied.");
+        api.MapGet("/admin/storage/usage", (Delegate)(async (HttpContext h) => TypedResults.Ok(await Db(h).AccountUsage(Current(h)))))
+            .WithSummary("Get storage usage per account")
+            .WithDescription("Administrator only. Returns account identity and personal-space file bytes including trash, without content metadata. Includes empty and disabled accounts; excludes common-space bytes.")
+            .Produces(403);
         api.MapGet("/shares/received", (Delegate)(async (HttpContext h) => Results.Ok(await Db(h).ReceivedShares(Current(h))))).Produces<List<SharedElement>>().WithSummary("List elements shared with me");
         api.MapGet("/elements/{id:guid}/shares", async (Guid id, HttpContext h) => Results.Ok(await Db(h).Shares(Current(h), id))).Produces<List<Share>>().WithSummary("List an element's shares");
         api.MapPut("/elements/{id:guid}/shares/{recipientId:guid}", async (Guid id, Guid recipientId, ShareRequest input, HttpContext h) => Results.Ok(await Db(h).SetShare(Current(h), id, recipientId, input))).Produces<Share>().WithSummary("Set a share's level")

@@ -1,7 +1,7 @@
 info:
   name: Get a miniature state and link
   type: http
-  seq: 11
+  seq: 14
   tags:
     - Storage
 

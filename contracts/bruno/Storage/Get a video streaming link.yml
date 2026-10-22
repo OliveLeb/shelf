@@ -1,7 +1,7 @@
 info:
   name: Get a video streaming link
   type: http
-  seq: 12
+  seq: 15
   tags:
     - Storage
 
