@@ -35,6 +35,9 @@ identifiants S3 ne sont pas journalisés ; ne pas activer de journalisation des
 requêtes HTTP sortantes de l’API.
 
 Le développement local utilise MinIO : voir [l’infrastructure](../infra/README.md).
+Le déploiement (choix du fournisseur, bucket privé, CORS, sauvegarde de
+PostgreSQL et restauration) est décrit dans
+[l’exploitation du stockage](../infra/storage.md).
 
 ## Contrat HTTP
 
@@ -67,7 +70,7 @@ est vérifié à la déclaration, puis de nouveau à la confirmation par une
 contrainte PostgreSQL, car un autre fichier a pu le prendre entre-temps.
 
 Le bucket doit autoriser le CORS de l’origine cliente pour les transferts depuis
-un navigateur.
+un navigateur : voir [la règle CORS](../infra/storage.md#cors-du-bucket-des-fichiers).
 
 ### Téléchargement
 

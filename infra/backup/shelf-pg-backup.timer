@@ -1,0 +1,11 @@
+# Runs shelf-pg-backup.service every day; a run missed while the VPS was off starts at boot.
+[Unit]
+Description=Daily Shelf PostgreSQL backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
