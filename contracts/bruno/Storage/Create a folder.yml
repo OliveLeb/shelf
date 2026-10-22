@@ -1,7 +1,7 @@
 info:
   name: Create a folder
   type: http
-  seq: 6
+  seq: 7
   tags:
     - Storage
 
@@ -13,7 +13,8 @@ http:
     data: |-
       {
         "name": "",
-        "parentId": ""
+        "parentId": "",
+        "space": ""
       }
   auth:
     type: bearer
@@ -37,7 +38,8 @@ examples:
         data: |-
           {
             "name": "",
-            "parentId": ""
+            "parentId": "",
+            "space": ""
           }
     response:
       status: 201

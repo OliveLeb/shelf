@@ -12,20 +12,21 @@ public sealed class StorageTransaction(NpgsqlConnection connection, NpgsqlTransa
         r.IsDBNull(7) ? null : new AccountSummary(r.GetGuid(7), r.GetString(8)));
     private static readonly Dictionary<string, string> Sorts = new() { ["name"] = "lower(e.name) {0}, e.name {0}", ["addedAt"] = "e.added_at {0}", ["size"] = "e.size {0}" };
 
-    /// <summary>Content of a folder, or of the root of the personal space when folderId is null. Folders come before files.</summary>
-    public async Task<List<Element>> Content(Account account, Guid? folderId, string? sort, string? order)
+    /// <summary>Content of a visible folder, or of the selected space's root. Folders come before files.</summary>
+    public async Task<List<Element>> Content(Account account, Guid? folderId, string? sort, string? order, string? space = null)
     {
         if (!Sorts.TryGetValue(sort ?? "name", out var key)) throw new StorageError(400, "invalid_sort");
         if ((order ??= "asc") is not ("asc" or "desc")) throw new StorageError(400, "invalid_order");
-        var space = await Destination(account, folderId);
+        var destination = await Destination(account, folderId, space);
         return await Query($"SELECT {ElementColumns} WHERE e.space_id=$1 AND e.parent_id IS NOT DISTINCT FROM $2 ORDER BY e.kind='file', {string.Format(key, order)}, lower(e.name), e.id",
-            ReadElement, space, folderId);
+            ReadElement, destination, folderId);
     }
 
     public async Task<Element> CreateFolder(Account account, FolderRequest input)
     {
         var name = Name(input.Name);
-        var space = await Destination(account, input.ParentId);
+        await LockSpaces(account);
+        var space = await Destination(account, input.ParentId, input.Space);
         var id = Guid.NewGuid();
         await Run("INSERT INTO elements (id, space_id, parent_id, kind, name, added_at, added_by) VALUES ($1,$2,$3,'folder',$4,$5,$6)",
             id, space, input.ParentId, name, clock.GetUtcNow(), account.Id);
@@ -38,7 +39,8 @@ public sealed class StorageTransaction(NpgsqlConnection connection, NpgsqlTransa
         if (input.Size is not >= 0) throw new StorageError(400, "invalid_size");
         var contentType = ContentType(input.ContentType);
         if (input.OnConflict is not (null or "keepBoth")) throw new StorageError(400, "invalid_conflict_policy");
-        var space = await Destination(account, input.ParentId);
+        await LockSpaces(account);
+        var space = await Destination(account, input.ParentId, input.Space);
         // Checked again at confirmation, since another element may take the name meanwhile.
         if (input.OnConflict is null && await Scalar("SELECT 1 FROM elements WHERE space_id=$1 AND parent_id IS NOT DISTINCT FROM $2 AND upper(name)=upper($3)", space, input.ParentId, name) is not null)
             throw new StorageError(409, "name_conflict");
@@ -52,11 +54,15 @@ public sealed class StorageTransaction(NpgsqlConnection connection, NpgsqlTransa
 
     public async Task<Element> Complete(Account account, Guid uploadId)
     {
+        await LockSpaces(account);
         var uploads = await Query("SELECT space_id, name, size, content_type, object_key, parent_id, on_conflict FROM uploads WHERE id=$1 AND account_id=$2 FOR UPDATE",
             r => (Space: r.GetGuid(0), Name: r.GetString(1), Size: r.GetInt64(2), ContentType: r.GetString(3), Key: r.GetString(4),
                 Parent: r.IsDBNull(5) ? (Guid?)null : r.GetGuid(5), KeepBoth: !r.IsDBNull(6)), uploadId, account.Id);
         if (uploads.Count == 0) throw new StorageError(404, "upload_not_found");
         var upload = uploads[0];
+        // The destination may have moved since declaration; recheck it under the space locks.
+        if (upload.Parent is not null && await Destination(account, upload.Parent) != upload.Space)
+            throw new StorageError(404, "folder_not_found");
         var size = await store.Size(upload.Key, cancellation);
         if (size is null) throw new StorageError(409, "upload_incomplete");
         if (size != upload.Size) throw new StorageError(409, "size_mismatch");
@@ -77,7 +83,7 @@ public sealed class StorageTransaction(NpgsqlConnection connection, NpgsqlTransa
 
     public async Task<SignedUrl> Download(Account account, Guid fileId)
     {
-        var files = await Query("SELECT e.name, e.object_key FROM elements e JOIN spaces s ON s.id=e.space_id WHERE e.id=$1 AND e.kind='file' AND s.owner_id=$2",
+        var files = await Query("SELECT e.name, e.object_key FROM elements e JOIN spaces s ON s.id=e.space_id WHERE e.id=$1 AND e.kind='file' AND (s.owner_id=$2 OR s.owner_id IS NULL)",
             r => (Name: r.GetString(0), Key: r.GetString(1)), fileId, account.Id);
         if (files.Count == 0) throw new StorageError(404, "element_not_found");
         return store.SignedDownload(files[0].Key, files[0].Name);
@@ -87,7 +93,8 @@ public sealed class StorageTransaction(NpgsqlConnection connection, NpgsqlTransa
     public async Task<Element> Rename(Account account, Guid elementId, RenameRequest input)
     {
         var name = Name(input.Name);
-        if (await Scalar("UPDATE elements e SET name=$3 FROM spaces s WHERE s.id=e.space_id AND e.id=$1 AND s.owner_id=$2 RETURNING e.id", elementId, account.Id, name) is null)
+        await LockSpaces(account);
+        if (await Scalar("UPDATE elements e SET name=$3 FROM spaces s WHERE s.id=e.space_id AND e.id=$1 AND (s.owner_id=$2 OR s.owner_id IS NULL) RETURNING e.id", elementId, account.Id, name) is null)
             throw new StorageError(404, "element_not_found");
         return await Get(elementId);
     }
@@ -95,12 +102,12 @@ public sealed class StorageTransaction(NpgsqlConnection connection, NpgsqlTransa
     /// <summary>Moving changes metadata only; the S3 object key does not depend on the folder.</summary>
     public async Task<Element> Move(Account account, Guid elementId, MoveRequest input)
     {
-        if (await Scalar("SELECT e.space_id FROM elements e JOIN spaces s ON s.id=e.space_id WHERE e.id=$1 AND s.owner_id=$2", elementId, account.Id) is not Guid space)
+        await LockSpaces(account, moving: true);
+        if (await Scalar("SELECT e.space_id FROM elements e JOIN spaces s ON s.id=e.space_id WHERE e.id=$1 AND (s.owner_id=$2 OR s.owner_id IS NULL)", elementId, account.Id) is not Guid space)
             throw new StorageError(404, "element_not_found");
-        // Moves of a space run one at a time, so two concurrent moves cannot each pass the cycle check and form a cycle together.
-        // NO KEY UPDATE leaves the foreign key checks of uploads and folder creations in the space unblocked.
-        await Run("SELECT 1 FROM spaces WHERE id=$1 FOR NO KEY UPDATE", space);
-        if (await Destination(account, input.ParentId) != space) throw new StorageError(404, "folder_not_found");
+        var common = await Scalar("SELECT 1 FROM spaces WHERE id=$1 AND owner_id IS NULL", space) is not null;
+        var destination = await Destination(account, input.ParentId, input.Space ?? (input.ParentId is null && common ? "common" : null));
+        if (common && destination != space) throw new StorageError(403, "common_to_personal_forbidden");
         if (input.ParentId is not null && await Scalar("""
             WITH RECURSIVE ancestors(id, parent_id) AS (
                 SELECT id, parent_id FROM elements WHERE id=$1
@@ -108,15 +115,39 @@ public sealed class StorageTransaction(NpgsqlConnection connection, NpgsqlTransa
             SELECT 1 FROM ancestors WHERE id=$2
             """, input.ParentId, elementId) is not null)
             throw new StorageError(409, "folder_cycle");
-        await Run("UPDATE elements SET parent_id=$2 WHERE id=$1", elementId, input.ParentId);
+        if (destination == space)
+            await Run("UPDATE elements SET parent_id=$2 WHERE id=$1", elementId, input.ParentId);
+        else
+            await Run("""
+                WITH RECURSIVE subtree(id) AS (
+                    SELECT id FROM elements WHERE id=$1
+                    UNION ALL SELECT e.id FROM elements e JOIN subtree p ON e.parent_id=p.id),
+                moved AS (
+                    UPDATE elements SET space_id=$2, parent_id=CASE WHEN id=$1 THEN $3::uuid ELSE parent_id END
+                    WHERE id IN (SELECT id FROM subtree) RETURNING id)
+                UPDATE uploads SET space_id=$2 WHERE parent_id IN (SELECT id FROM moved)
+                """, elementId, destination, input.ParentId);
         return await Get(elementId);
     }
 
-    /// <summary>Space of a visible folder, or the personal space when folderId is null.</summary>
-    private async Task<Guid> Destination(Account account, Guid? folderId) => folderId is null
-        ? (Guid)(await Scalar("SELECT id FROM spaces WHERE owner_id=$1", account.Id))!
-        : await Scalar("SELECT e.space_id FROM elements e JOIN spaces s ON s.id=e.space_id WHERE e.id=$1 AND e.kind='folder' AND s.owner_id=$2", folderId, account.Id) as Guid?
-            ?? throw new StorageError(404, "folder_not_found");
+    /// <summary>Writes share locks; moves exclude writes so a subtree cannot gain children during transfer.
+    /// Lock both accessible spaces in UUID order to avoid deadlocks between personal-to-common transfers.
+    /// NO KEY UPDATE lets foreign key checks proceed, and concurrent ordinary writes remain possible.</summary>
+    private Task LockSpaces(Account account, bool moving = false) => Run($"SELECT id FROM spaces WHERE owner_id=$1 OR owner_id IS NULL ORDER BY id FOR {(moving ? "NO KEY UPDATE" : "SHARE")}", account.Id);
+
+    /// <summary>Space of a visible folder, or the selected root (personal by default). An explicit space must match the folder.</summary>
+    private async Task<Guid> Destination(Account account, Guid? folderId, string? space = null)
+    {
+        if (space is not (null or "personal" or "common")) throw new StorageError(400, "invalid_space");
+        if (folderId is null)
+            return (Guid)(await Scalar(space == "common" ? "SELECT id FROM spaces WHERE owner_id IS NULL" : "SELECT id FROM spaces WHERE owner_id=$1",
+                space == "common" ? [] : [account.Id]))!;
+        return await Scalar("""
+            SELECT e.space_id FROM elements e JOIN spaces s ON s.id=e.space_id
+            WHERE e.id=$1 AND e.kind='folder' AND (s.owner_id=$2 OR s.owner_id IS NULL)
+            AND ($3::text IS NULL OR ($3='common' AND s.owner_id IS NULL) OR ($3='personal' AND s.owner_id=$2))
+            """, folderId, account.Id, space) as Guid? ?? throw new StorageError(404, "folder_not_found");
+    }
 
     private async Task<Element> Get(Guid id) => (await Query($"SELECT {ElementColumns} WHERE e.id=$1", ReadElement, id)).Single();
 

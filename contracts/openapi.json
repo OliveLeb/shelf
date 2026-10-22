@@ -590,6 +590,50 @@
         ]
       }
     },
+    "/spaces/common/elements": {
+      "get": {
+        "tags": [
+          "Storage"
+        ],
+        "summary": "List the common space root",
+        "parameters": [
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Element"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
     "/uploads": {
       "post": {
         "tags": [
@@ -1024,6 +1068,12 @@
               "string"
             ],
             "format": "uuid"
+          },
+          "space": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -1154,9 +1204,6 @@
         }
       },
       "MoveRequest": {
-        "required": [
-          "parentId"
-        ],
         "type": "object",
         "properties": {
           "parentId": {
@@ -1165,6 +1212,12 @@
               "string"
             ],
             "format": "uuid"
+          },
+          "space": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -1370,6 +1423,12 @@
             "format": "uuid"
           },
           "onConflict": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "space": {
             "type": [
               "null",
               "string"

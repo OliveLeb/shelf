@@ -1,7 +1,7 @@
 info:
   name: Declare an upload
   type: http
-  seq: 2
+  seq: 3
   tags:
     - Storage
 
@@ -16,7 +16,8 @@ http:
         "size": "",
         "contentType": "",
         "parentId": "",
-        "onConflict": ""
+        "onConflict": "",
+        "space": ""
       }
   auth:
     type: bearer
@@ -43,7 +44,8 @@ examples:
             "size": "",
             "contentType": "",
             "parentId": "",
-            "onConflict": ""
+            "onConflict": "",
+            "space": ""
           }
     response:
       status: 201
