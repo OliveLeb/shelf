@@ -62,6 +62,9 @@ JSON avec `Cache-Control: no-store` et signalent les erreurs par
 | `GET /spaces/personal/elements?sort=&order=` | — | 200, éléments de la racine de son espace personnel |
 | `GET /spaces/common/elements?sort=&order=` | — | 200, éléments de la racine de l’espace commun |
 | `GET /folders/{id}/elements?sort=&order=` | — | 200, éléments du dossier |
+| `GET /elements/search?query=` | — | 200, éléments visibles dont le nom contient `query`, hors corbeille |
+| `GET /storage/usage` | — | 200, `{personalBytes, commonBytes}`, corbeille comprise |
+| `GET /admin/storage/usage` | — | 200, liste de `{account: {id, username}, bytes}`, réservée aux administrateurs |
 | `POST /folders` | `name`, `parentId` (dossier parent ; absent ou `null` : racine), `space` | 201, dossier créé |
 | `POST /elements/{id}/rename` | `name` | 200, élément renommé |
 | `POST /elements/{id}/move` | `parentId` (dossier de destination ; `null` : racine), `space` | 200, élément déplacé |
@@ -83,6 +86,35 @@ JSON avec `Cache-Control: no-store` et signalent les erreurs par
 Un élément contient `id`, `kind` (`file` ou `folder`), `name`, `parentId`
 (`null` à la racine), `size` et `contentType` (`null` pour un dossier), `addedAt`
 et `addedBy` (`{id, username}`, ou `null` si le compte n’existe plus).
+
+### Recherche et volume occupé
+
+L’[issue #14](https://github.com/OliveLeb/shelf/issues/14) ajoute la recherche
+par sous-chaîne du nom, sans tenir compte de la casse, sur les fichiers et
+dossiers de l’espace personnel, de l’espace commun et des partages reçus.
+`query` contient de 1 à 255 caractères et ne peut pas être uniquement composé
+d’espaces ; il est recherché tel quel, sans retirer les espaces. Les caractères
+`%` et `_` sont littéraux, pas des jokers. Les résultats sont triés par nom puis
+identifiant et ne contiennent pas de doublons lorsque les partages se chevauchent.
+Le partage d’un dossier couvre ses descendants actuels et futurs ; un partage
+de fichier ne rend pas ses ancêtres visibles. Les éléments en corbeille sont
+exclus, y compris les descendants d’un dossier supprimé. Les droits sont
+recalculés à chaque recherche ; le rôle administrateur n’élargit pas la visibilité.
+
+`GET /storage/usage` expose les octets des fichiers confirmés dans son espace
+personnel et dans l’espace commun, corbeille comprise. Les dossiers, miniatures
+et envois non confirmés ne comptent pas. Les fichiers reçus par partage comptent
+uniquement dans l’espace de leur propriétaire, même si le destinataire les a
+ajoutés. Une suppression en corbeille ou une restauration ne change pas le
+total ; une purge le réduit dès le retrait des métadonnées, avant la suppression
+S3 asynchrone. Le contenu précédent d’un fichier remplacé compte jusqu’à sa purge.
+Ces totaux ne constituent donc pas une mesure de la facturation exacte du S3.
+
+`GET /admin/storage/usage` renvoie uniquement l’identifiant, le nom de compte et
+le total personnel de chaque compte, y compris les comptes vides ou désactivés.
+Il n’expose aucune métadonnée de contenu et n’attribue pas le volume commun
+aux auteurs des ajouts. Un utilisateur ordinaire reçoit `403 administrator_required`.
+Aucun quota ni contrôle d’envoi fondé sur ces totaux n’est ajouté.
 
 ### Espace commun
 
@@ -376,7 +408,9 @@ selon RFC 5987). Les requêtes partielles (`Range`) sont prises en charge par le
 | 400 | `invalid_recipient` | Destinataire inexistant, désactivé ou identique au propriétaire |
 | 400 | `invalid_space` | `space` autre que `personal` ou `common` |
 | 400 | `invalid_sort`, `invalid_order` | `sort` ou `order` inconnu |
+| 400 | `invalid_query` | Recherche absente, vide, uniquement composée d’espaces ou de plus de 255 caractères |
 | 401 | `authentication_required` | Session absente, expirée ou compte désactivé |
+| 403 | `administrator_required` | Consultation des volumes par compte sans rôle administrateur |
 | 403 | `write_forbidden` | Écriture en Lecture seule, modification d’une racine partagée ou déplacement interdit hors de l’espace du propriétaire |
 | 403 | `sharing_forbidden` | Gestion des partages par un destinataire ou sur un élément commun |
 | 403 | `common_to_personal_forbidden` | Déplacement d’un élément commun vers un espace personnel |

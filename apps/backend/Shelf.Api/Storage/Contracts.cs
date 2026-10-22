@@ -29,3 +29,8 @@ public sealed record SharedElement(Element Element, AccountSummary Owner, string
 
 /// <summary>A deleted subtree. OriginalParentId and OriginalPath record its location at deletion.</summary>
 public sealed record TrashedElement(Guid Id, Element Element, Guid? OriginalParentId, string OriginalPath, DateTimeOffset DeletedAt, AccountSummary? DeletedBy);
+
+/// <summary>Confirmed file bytes in the user's personal space and the common space, including trash. No quota is applied.</summary>
+public sealed record StorageUsage(long PersonalBytes, long CommonBytes);
+/// <summary>An account's personal-space file bytes, including trash, without any content metadata.</summary>
+public sealed record AccountStorageUsage(AccountSummary Account, long Bytes);

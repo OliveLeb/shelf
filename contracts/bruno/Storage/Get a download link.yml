@@ -1,7 +1,7 @@
 info:
   name: Get a download link
   type: http
-  seq: 10
+  seq: 13
   tags:
     - Storage
 

@@ -1,7 +1,7 @@
 info:
   name: Restore a trashed element
   type: http
-  seq: 19
+  seq: 22
   tags:
     - Storage
 

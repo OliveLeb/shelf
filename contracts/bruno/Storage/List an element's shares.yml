@@ -1,7 +1,7 @@
 info:
   name: List an element's shares
   type: http
-  seq: 2
+  seq: 5
   tags:
     - Storage
 
