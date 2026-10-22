@@ -8,8 +8,7 @@ After=network-online.target
 Type=oneshot
 EnvironmentFile=/etc/shelf/backup.env
 ExecStart=/usr/local/bin/shelf-pg-backup
+TimeoutStartSec=1h
+# Implies a private /tmp, a read-only system and no privilege escalation.
 DynamicUser=yes
-PrivateTmp=yes
-ProtectSystem=strict
 ProtectHome=yes
-NoNewPrivileges=yes

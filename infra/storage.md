@@ -54,10 +54,11 @@ avec une clé d'administration du compte S3 :
 
 ```sh
 export S3_ENDPOINT=https://s3.fr-par.scw.cloud S3_REGION=fr-par
-read -r S3_ACCESS_KEY; read -rs S3_SECRET_KEY; export S3_ACCESS_KEY S3_SECRET_KEY
+read -r S3_ACCESS_KEY; read -rs S3_SECRET_KEY
+# Identifiants passés par un fichier de configuration curl, pas en argument (visible dans ps).
 s3() {
-  curl --silent --show-error --fail-with-body \
-    --aws-sigv4 "aws:amz:$S3_REGION:s3" --user "$S3_ACCESS_KEY:$S3_SECRET_KEY" "$@"
+  curl --silent --show-error --fail-with-body --aws-sigv4 "aws:amz:$S3_REGION:s3" \
+    --config <(printf 'user = "%s:%s"\n' "$S3_ACCESS_KEY" "$S3_SECRET_KEY") "$@"
 }
 EMPTY_SHA256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 ```
@@ -111,7 +112,7 @@ Avec une politique au format IAM (AWS, MinIO et de nombreux fournisseurs) :
     },
     {
       "Effect": "Allow",
-      "Action": ["s3:ListBucketMultipartUploads"],
+      "Action": ["s3:ListBucket", "s3:ListBucketMultipartUploads"],
       "Resource": "arn:aws:s3:::shelf-files"
     }
   ]
@@ -120,8 +121,11 @@ Avec une politique au format IAM (AWS, MinIO et de nombreux fournisseurs) :
 
 Une URL signée porte les droits de la clé qui l'a signée : sans `s3:PutObject`,
 aucun envoi n'aboutit. `s3:GetObject` couvre aussi la vérification de taille à
-la confirmation et les copies côté serveur (avec `s3:PutObject`). Les autres
-fournisseurs proposent des clés restreintes à un bucket depuis leur console.
+la confirmation. Sans `s3:ListBucket`, AWS répond `403` au lieu de `404` pour un
+objet absent, et la confirmation d'un envoi inachevé échoue au lieu de répondre
+`upload_incomplete`. La liste couvre aussi l'envoi en plusieurs parties, la
+purge et les copies côté serveur prévus par le stockage. Les autres fournisseurs
+proposent des clés restreintes à un bucket depuis leur console.
 
 Vérifier qu'un accès anonyme est refusé (`403` attendu sur le bucket et sur un
 objet) et qu'aucune politique n'est attachée (`NoSuchBucketPolicy`, `404`) :
@@ -215,7 +219,8 @@ version majeure que le serveur ou plus récente (PostgreSQL 18, paquet
 
 Créer pour la sauvegarde une clé distincte de celle de l'API, limitée à
 l'écriture dans le bucket des sauvegardes. Un VPS compromis ne peut alors ni
-lire ni supprimer les sauvegardes existantes :
+lire, ni lister, ni supprimer les sauvegardes ; il peut en revanche écraser une
+sauvegarde dont il devine le nom (voir [la rétention](#rétention)) :
 
 ```json
 {
@@ -226,9 +231,12 @@ lire ni supprimer les sauvegardes existantes :
 }
 ```
 
-Côté PostgreSQL, utiliser un rôle de lecture capable d'exporter toute la base
-(par exemple membre de `pg_read_all_data`), avec mot de passe et TLS hors de la
-machine locale.
+Côté PostgreSQL, créer un rôle de lecture seule capable d'exporter toute la
+base, avec mot de passe, et TLS hors de la machine locale :
+
+```sh
+createuser --pwprompt --role=pg_read_all_data shelf_backup
+```
 
 ### Installation (systemd)
 
@@ -256,11 +264,9 @@ SHELF_BACKUP_S3_BUCKET=shelf-backups
 SHELF_BACKUP_S3_FORCE_PATH_STYLE=false
 SHELF_BACKUP_S3_ACCESS_KEY=<clé de sauvegarde>
 SHELF_BACKUP_S3_SECRET_KEY=<secret de sauvegarde>
-# Préfixe des objets ; défaut postgres/
-#SHELF_BACKUP_S3_PREFIX=postgres/
 ```
 
-Le service s'exécute sous un utilisateur système éphémère (`DynamicUser`) : la
+Le service s'exécute sous un utilisateur Unix éphémère (`DynamicUser`) : la
 connexion à PostgreSQL passe par TCP avec mot de passe, pas par
 l'authentification `peer`. Activer la tâche, lancer une première sauvegarde et
 consulter son résultat :
@@ -269,7 +275,7 @@ consulter son résultat :
 sudo systemctl daemon-reload
 sudo systemctl enable --now shelf-pg-backup.timer
 sudo systemctl start shelf-pg-backup.service
-journalctl -u shelf-pg-backup.service -n 20
+sudo journalctl -u shelf-pg-backup.service -n 20
 systemctl list-timers shelf-pg-backup.timer
 ```
 
@@ -303,8 +309,10 @@ s3 -X PUT "$S3_ENDPOINT/shelf-backups?lifecycle=" \
 
 Si le fournisseur ne prend pas en charge cette opération, configurer la
 rétention depuis sa console ou supprimer les anciennes sauvegardes à la main.
-Quand il propose le verrouillage d'objets (Object Lock), l'activer sur ce bucket
-protège en plus les sauvegardes contre l'écrasement.
+Pour protéger les sauvegardes contre l'écrasement par un VPS compromis, activer
+sur ce bucket, quand le fournisseur le propose, le verrouillage d'objets (Object
+Lock) ou le versionnement ; avec le versionnement, ajouter à la règle une
+expiration des versions anciennes (`NoncurrentVersionExpiration`).
 
 ### Restauration
 
@@ -330,12 +338,14 @@ clé d'administration S3 (la clé de sauvegarde ne peut pas lire).
    ```
 
 4. Restaurer dans une base **vide**, appartenant au rôle de l'API (ici `shelf`),
-   en une seule transaction :
+   en une seule transaction, avec un rôle administrateur de PostgreSQL. La
+   sauvegarde ne contient pas les rôles : sur un nouveau serveur, créer d'abord
+   celui de l'API (et celui de la sauvegarde, comme à l'installation) :
 
    ```sh
+   createuser --pwprompt shelf
    createdb --owner=shelf shelf
-   pg_restore --no-owner --role=shelf --exit-on-error --single-transaction \
-     --dbname=shelf shelf.dump
+   pg_restore --no-owner --role=shelf --single-transaction --dbname=shelf shelf.dump
    ```
 
    Pour remplacer une base existante, la renommer ou la supprimer d'abord

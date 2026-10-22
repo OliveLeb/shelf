@@ -10,7 +10,6 @@ set -euo pipefail
 : "${SHELF_BACKUP_S3_BUCKET:?set SHELF_BACKUP_S3_BUCKET}"
 : "${SHELF_BACKUP_S3_ACCESS_KEY:?set SHELF_BACKUP_S3_ACCESS_KEY}"
 : "${SHELF_BACKUP_S3_SECRET_KEY:?set SHELF_BACKUP_S3_SECRET_KEY}"
-prefix="${SHELF_BACKUP_S3_PREFIX:-postgres/}"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -20,7 +19,7 @@ pg_dump --no-password --format=custom --file="$dump"
 # A truncated or unreadable archive fails here instead of being uploaded.
 pg_restore --list "$dump" >/dev/null
 
-key="${prefix}shelf-$(date -u +%Y%m%dT%H%M%SZ).dump"
+key="postgres/shelf-$(date -u +%Y%m%dT%H%M%SZ).dump"
 endpoint="${SHELF_BACKUP_S3_ENDPOINT%/}"
 if [ "${SHELF_BACKUP_S3_FORCE_PATH_STYLE:-false}" = true ]; then
   url="$endpoint/$SHELF_BACKUP_S3_BUCKET/$key"
