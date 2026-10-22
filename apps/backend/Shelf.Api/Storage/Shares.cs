@@ -18,6 +18,7 @@ public sealed partial class StorageTransaction
         var rows = await Query(Ancestors + """
             SELECT e.space_id, e.kind, s.owner_id, (s.owner_id IS NULL OR s.owner_id=$2)
             FROM elements e JOIN spaces s ON s.id=e.space_id WHERE e.id=$1
+            AND e.trash_id IS NULL
             AND (s.owner_id IS NULL OR s.owner_id=$2 OR EXISTS (
                 SELECT 1 FROM shares sh JOIN ancestors a ON a.id=sh.element_id WHERE sh.recipient_id=$2))
             """, r => new ElementAccess(r.GetGuid(0), r.GetString(1), r.IsDBNull(2) ? null : r.GetGuid(2), r.GetBoolean(3)), id, account.Id);
@@ -68,6 +69,6 @@ public sealed partial class StorageTransaction
             owner.id, owner.username, sh.level
         FROM elements e JOIN spaces s ON s.id=e.space_id LEFT JOIN accounts a ON a.id=e.added_by
         JOIN shares sh ON sh.element_id=e.id JOIN accounts owner ON owner.id=s.owner_id
-        WHERE sh.recipient_id=$1 ORDER BY lower(e.name), e.id
+        WHERE sh.recipient_id=$1 AND e.trash_id IS NULL ORDER BY lower(e.name), e.id
         """, r => new SharedElement(ReadElement(r), new AccountSummary(r.GetGuid(9), r.GetString(10)), r.GetString(11)), account.Id);
 }

@@ -6,7 +6,9 @@ d’un fichier dans son **espace personnel**),
 [l’issue #5](https://github.com/OliveLeb/shelf/issues/5) (**dossiers**, renommage,
 déplacement et noms uniques) et [l’issue #8](https://github.com/OliveLeb/shelf/issues/8)
 (**espace commun**) et [l’issue #9](https://github.com/OliveLeb/shelf/issues/9)
-(**partages en Lecture** et **Partagés avec moi**). Le vocabulaire suit [`CONTEXT.md`](../CONTEXT.md).
+(**partages en Lecture** et **Partagés avec moi**), puis
+[l’issue #10](https://github.com/OliveLeb/shelf/issues/10) (**corbeille et purge**).
+Le vocabulaire suit [`CONTEXT.md`](../CONTEXT.md).
 
 Le contenu des fichiers vit dans un bucket compatible S3 privé et transite
 directement entre le client et le S3 par URL signées de courte durée
@@ -63,6 +65,11 @@ JSON avec `Cache-Control: no-store` et signalent les erreurs par
 | `GET /elements/{id}/shares` | — | 200, partages directs et hérités de l’élément, réservés au propriétaire |
 | `DELETE /elements/{id}/shares/{recipientId}` | — | 204, partage direct retiré |
 | `GET /shares/received` | — | 200, racines des partages reçus avec leur propriétaire et leur niveau |
+| `DELETE /elements/{id}` | — | 204, élément et contenu placés en corbeille |
+| `GET /spaces/{space}/trash` | — | 200, corbeille `personal` ou `common` |
+| `POST /trash/{id}/restore` | — | 200, élément restauré |
+| `DELETE /trash/{id}` | — | 204, élément purgé définitivement |
+| `DELETE /spaces/{space}/trash` | — | 204, corbeille vidée |
 
 Un élément contient `id`, `kind` (`file` ou `folder`), `name`, `parentId`
 (`null` à la racine), `size` et `contentType` (`null` pour un dossier), `addedAt`
@@ -178,8 +185,71 @@ fichier est renommé automatiquement à la confirmation : `photo.jpg` devient
 `photo (1).jpg`, puis `photo (2).jpg`… Le nom définitif figure dans la réponse
 de la confirmation.
 
+Avec `"onConflict": "replace"`, la confirmation conserve l’identifiant, le nom
+et les partages du fichier existant et en remplace les octets, la taille, le type,
+la date et l’auteur de l’ajout. L’ancien contenu devient un élément distinct,
+sans partage, dans la corbeille du même espace. La déclaration et un transfert
+incomplet ne modifient jamais le fichier existant. Si le nom est libre à la
+confirmation, un nouveau fichier est créé ; un dossier du même nom reste un
+conflit `409`. Les noms sont revérifiés à la confirmation, sous le même verrou
+que les suppressions, restaurations et déplacements.
+
 Le bucket doit autoriser le CORS de l’origine cliente pour les transferts depuis
 un navigateur : voir [la règle CORS](../infra/storage.md#cors-du-bucket-des-fichiers).
+
+### Corbeille et purge
+
+La migration `007_trash` ajoute la corbeille et la file persistante de suppression
+S3. `DELETE /elements/{id}` conserve un instantané du sous-arbre, sa date de
+suppression, son auteur et son emplacement d’origine. Le nom redevient disponible
+dans le dossier. Le sous-arbre disparaît des dossiers, du téléchargement et de
+**Partagés avec moi** ; ses partages sont conservés mais inactifs. Les nouvelles
+écritures et confirmations d’envoi dans ses dossiers répondent `404`.
+
+Une entrée de corbeille contient `id`, `element`, `originalParentId`,
+`originalPath` (chemin du dossier parent au moment de la suppression), `deletedAt`
+et `deletedBy` (`{id, username}`, ou `null` si le compte n’existe plus).
+Seul le propriétaire gère sa corbeille personnelle ; les destinataires de
+partages et les administrateurs ne peuvent pas y accéder. Tout utilisateur actif
+peut consulter, restaurer, purger ou vider la corbeille commune.
+
+La restauration est possible strictement avant `deletedAt + 30 jours`. Elle
+replace le sous-arbre dans le dossier d’origine s’il existe, reste actif et
+appartient toujours au même espace ; sinon elle le replace à la racine de cet
+espace. Un nom pris provoque le même renommage que `keepBoth`. Les éléments déjà
+supprimés séparément ne font pas partie de l’instantané d’un dossier supprimé
+ensuite. Restaurer ce dossier ne les restaure pas implicitement.
+
+La purge anticipée, le vidage et l’expiration suppriment les métadonnées et
+inscrivent les clés S3 à supprimer **dans la même transaction PostgreSQL**, par
+des déclencheurs de suppression. Les objets des envois en cours emportés par un
+dossier purgé sont également inscrits. La confirmation d’un envoi transfère sa
+clé au fichier avant de supprimer l’envoi : elle ne programme pas sa suppression.
+
+Une tâche hébergée dans chaque serveur HTTP vérifie l’expiration toutes les
+secondes puis traite jusqu’à 100 suppressions S3. Plusieurs serveurs se
+répartissent la file avec `FOR UPDATE SKIP LOCKED`. Une panne S3 conserve la
+clé, avec une nouvelle tentative après 30 secondes puis un délai exponentiel
+plafonné à une heure. Le redémarrage reprend la file PostgreSQL. Une panne
+après la suppression S3 mais avant le commit répète un `DELETE` idempotent.
+La réponse `204` garantit donc la purge des métadonnées et l’enregistrement du
+travail S3 ; l’effacement physique suit en tâche de fond, sans dépendre de la
+disponibilité immédiate du fournisseur. Les journaux `object_deletion_retry` et
+`storage_cleanup_database_retry` signalent les reprises sans exposer de secret.
+
+Une ancienne URL d’envoi peut recréer un objet déjà purgé, même si l’envoi
+commencé avant son expiration se termine après. La tâche compare donc aussi
+les objets du préfixe `files/` aux fichiers (corbeille comprise) et aux envois
+en cours, dans un même instantané PostgreSQL. Les clés sans référence rejoignent
+la même file persistante. Le balayage traite au plus une page de 1 000 clés par
+seconde, recommence une minute après la fin et repart du début au redémarrage.
+Une panne de liste produit `object_reconciliation_retry`, sans empêcher le
+traitement de la file existante. Le préfixe `files/` est réservé à Shelf : toute
+écriture doit réserver sa clé en base avant d’envoyer les octets ; la confirmation
+transfère cette référence au fichier dans une transaction unique.
+
+Le bucket doit rester sans versionnement, comme indiqué dans le guide
+d’exploitation. Les miniatures seront intégrées au même mécanisme par #13.
 
 ### Téléchargement
 
@@ -194,7 +264,7 @@ selon RFC 5987). Les requêtes partielles (`Range`) sont prises en charge par le
 | 400 | `invalid_name` | Nom vide, de plus de 255 caractères, `.`/`..`, avec `/`, `\` ou caractère de contrôle |
 | 400 | `invalid_size` | Taille absente ou négative |
 | 400 | `invalid_content_type` | Type de contenu invalide |
-| 400 | `invalid_conflict_policy` | `onConflict` autre que `keepBoth` |
+| 400 | `invalid_conflict_policy` | `onConflict` autre que `keepBoth` ou `replace` |
 | 400 | `invalid_share_level` | Niveau autre que `read` (y compris absent) |
 | 400 | `invalid_recipient` | Destinataire inexistant, désactivé ou identique au propriétaire |
 | 400 | `invalid_space` | `space` autre que `personal` ou `common` |
@@ -206,6 +276,7 @@ selon RFC 5987). Les requêtes partielles (`Range`) sont prises en charge par le
 | 404 | `upload_not_found` | Envoi inconnu, déjà confirmé ou déclaré par un autre utilisateur |
 | 404 | `element_not_found` | Élément inexistant ou invisible pour l’utilisateur (ou dossier passé au téléchargement) |
 | 404 | `folder_not_found` | Dossier parent, de destination ou listé inexistant, invisible, qui est un fichier ou ne correspond pas à `space` |
+| 404 | `trash_not_found` | Entrée de corbeille inexistante, inaccessible ou expirée lors d’une restauration |
 | 409 | `upload_incomplete` | Objet absent du bucket à la confirmation ; envoyer puis confirmer de nouveau |
 | 409 | `size_mismatch` | Taille de l’objet différente de la déclaration ; renvoyer le contenu puis confirmer de nouveau |
 | 409 | `name_conflict` | Un élément du même nom, sans tenir compte de la casse, existe déjà dans le dossier |
@@ -218,8 +289,8 @@ accès au contenu.
 
 ## Limites actuelles
 
-Les partages en Écriture, la corbeille, l’envoi en plusieurs
-parties, l’expiration des envois abandonnés, la politique « remplacer », les miniatures et la purge des
-objets à la suppression d’un compte sont livrés par les autres sous-issues de #3.
-En attendant #15, la suppression d’un compte efface ses métadonnées de stockage
-mais laisse ses objets dans le bucket.
+Les partages en Écriture, l’envoi en plusieurs parties, l’expiration des envois
+abandonnés et les miniatures restent livrés par les autres sous-issues de #3.
+La file de suppression reçoit aussi les objets effacés par cascade lors de la
+suppression d’un compte ; la validation complète du cycle de vie des comptes et
+sa documentation d’authentification relèvent de #15.

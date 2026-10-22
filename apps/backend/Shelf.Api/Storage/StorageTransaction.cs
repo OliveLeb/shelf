@@ -18,7 +18,7 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
         if (!Sorts.TryGetValue(sort ?? "name", out var key)) throw new StorageError(400, "invalid_sort");
         if ((order ??= "asc") is not ("asc" or "desc")) throw new StorageError(400, "invalid_order");
         var destination = await Destination(account, folderId, space, writable: false);
-        return await Query($"SELECT {ElementColumns} WHERE e.space_id=$1 AND e.parent_id IS NOT DISTINCT FROM $2 ORDER BY e.kind='file', {string.Format(key, order)}, lower(e.name), e.id",
+        return await Query($"SELECT {ElementColumns} WHERE e.space_id=$1 AND e.parent_id IS NOT DISTINCT FROM $2 AND e.trash_id IS NULL ORDER BY e.kind='file', {string.Format(key, order)}, lower(e.name), e.id",
             ReadElement, destination, folderId);
     }
 
@@ -38,11 +38,13 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
         var name = Name(input.Name);
         if (input.Size is not >= 0) throw new StorageError(400, "invalid_size");
         var contentType = ContentType(input.ContentType);
-        if (input.OnConflict is not (null or "keepBoth")) throw new StorageError(400, "invalid_conflict_policy");
+        if (input.OnConflict is not (null or "keepBoth" or "replace")) throw new StorageError(400, "invalid_conflict_policy");
         await LockSpaces(account);
         var space = await Destination(account, input.ParentId, input.Space);
         // Checked again at confirmation, since another element may take the name meanwhile.
-        if (input.OnConflict is null && await Scalar("SELECT 1 FROM elements WHERE space_id=$1 AND parent_id IS NOT DISTINCT FROM $2 AND upper(name)=upper($3)", space, input.ParentId, name) is not null)
+        if (input.OnConflict is null && await Scalar("SELECT 1 FROM elements WHERE space_id=$1 AND parent_id IS NOT DISTINCT FROM $2 AND upper(name)=upper($3) AND trash_id IS NULL", space, input.ParentId, name) is not null)
+            throw new StorageError(409, "name_conflict");
+        if (input.OnConflict == "replace" && await Scalar("SELECT 1 FROM elements WHERE space_id=$1 AND parent_id IS NOT DISTINCT FROM $2 AND upper(name)=upper($3) AND trash_id IS NULL AND kind='folder'", space, input.ParentId, name) is not null)
             throw new StorageError(409, "name_conflict");
         var id = Guid.NewGuid();
         var key = ObjectStore.NewKey();
@@ -54,10 +56,11 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
 
     public async Task<Element> Complete(Account account, Guid uploadId)
     {
-        await LockSpaces(account);
+        // Serialize confirmation with replacement, trash, restore and moves before resolving the current name.
+        await LockSpaces(account, moving: true);
         var uploads = await Query("SELECT space_id, name, size, content_type, object_key, parent_id, on_conflict FROM uploads WHERE id=$1 AND account_id=$2 FOR UPDATE",
             r => (Space: r.GetGuid(0), Name: r.GetString(1), Size: r.GetInt64(2), ContentType: r.GetString(3), Key: r.GetString(4),
-                Parent: r.IsDBNull(5) ? (Guid?)null : r.GetGuid(5), KeepBoth: !r.IsDBNull(6)), uploadId, account.Id);
+                Parent: r.IsDBNull(5) ? (Guid?)null : r.GetGuid(5), Policy: r.IsDBNull(6) ? null : r.GetString(6)), uploadId, account.Id);
         if (uploads.Count == 0) throw new StorageError(404, "upload_not_found");
         var upload = uploads[0];
         // The destination may have moved since declaration; recheck it under the space locks.
@@ -66,18 +69,31 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
         var size = await store.Size(upload.Key, cancellation);
         if (size is null) throw new StorageError(409, "upload_incomplete");
         if (size != upload.Size) throw new StorageError(409, "size_mismatch");
+        if (upload.Policy == "replace")
+        {
+            var existing = await Query("SELECT id, kind FROM elements WHERE space_id=$1 AND parent_id IS NOT DISTINCT FROM $2 AND upper(name)=upper($3) AND trash_id IS NULL",
+                r => (Id: r.GetGuid(0), Kind: r.GetString(1)), upload.Space, upload.Parent, upload.Name);
+            if (existing.Count > 0)
+            {
+                if (existing[0].Kind != "file") throw new StorageError(409, "name_conflict");
+                var replaced = await ReplaceContent(account, existing[0].Id, upload.Space, upload.Key, upload.Size, upload.ContentType);
+                await Run("DELETE FROM uploads WHERE id=$1", uploadId);
+                return replaced;
+            }
+        }
         var id = Guid.NewGuid();
-        await Run("DELETE FROM uploads WHERE id=$1", uploadId);
         // The unique name index decides between concurrent uploads: a taken name inserts nothing, then "keep both" tries the next number.
         for (var number = 0; ; number++)
         {
             if (await Scalar("""
                 INSERT INTO elements (id, space_id, parent_id, kind, name, size, content_type, object_key, added_at, added_by)
-                VALUES ($1,$2,$3,'file',$4,$5,$6,$7,$8,$9) ON CONFLICT (space_id, parent_id, upper(name)) DO NOTHING RETURNING id
+                VALUES ($1,$2,$3,'file',$4,$5,$6,$7,$8,$9) ON CONFLICT (space_id, parent_id, upper(name)) WHERE trash_id IS NULL DO NOTHING RETURNING id
                 """, id, upload.Space, upload.Parent, Numbered(upload.Name, number), upload.Size, upload.ContentType, upload.Key, clock.GetUtcNow(), account.Id) is not null)
                 break;
-            if (!upload.KeepBoth) throw new StorageError(409, "name_conflict");
+            if (upload.Policy != "keepBoth") throw new StorageError(409, "name_conflict");
         }
+        // Transfer the key before deleting the upload so the outbox does not delete confirmed content.
+        await Run("DELETE FROM uploads WHERE id=$1", uploadId);
         return await Get(id);
     }
 
