@@ -1,0 +1,66 @@
+info:
+  name: List the common space root
+  type: http
+  seq: 2
+  tags:
+    - Storage
+
+http:
+  method: GET
+  url: "{{baseUrl}}/spaces/common/elements"
+  params:
+    - name: sort
+      value: ""
+      type: query
+      disabled: true
+    - name: order
+      value: ""
+      type: query
+      disabled: true
+  auth:
+    type: bearer
+    token: "{{token}}"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+examples:
+  - name: 200 Response
+    description: OK
+    request:
+      url: "{{baseUrl}}/spaces/common/elements"
+      method: GET
+      params:
+        - name: sort
+          value: ""
+          type: query
+          disabled: true
+        - name: order
+          value: ""
+          type: query
+          disabled: true
+    response:
+      status: 200
+      statusText: OK
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          [
+            {
+              "id": "",
+              "kind": "",
+              "name": "",
+              "parentId": "",
+              "size": "",
+              "contentType": "",
+              "addedAt": "",
+              "addedBy": ""
+            }
+          ]

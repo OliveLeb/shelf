@@ -1,7 +1,7 @@
 info:
   name: Move an element
   type: http
-  seq: 8
+  seq: 9
   tags:
     - Storage
 
@@ -16,7 +16,8 @@ http:
     type: json
     data: |-
       {
-        "parentId": ""
+        "parentId": "",
+        "space": ""
       }
   auth:
     type: bearer
@@ -43,7 +44,8 @@ examples:
         type: json
         data: |-
           {
-            "parentId": ""
+            "parentId": "",
+            "space": ""
           }
     response:
       status: 200
