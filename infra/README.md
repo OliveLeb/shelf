@@ -1,5 +1,10 @@
 # Infrastructure
 
+Ce guide couvre le développement local. Le déploiement du stockage sur un VPS
+(fournisseur compatible S3, bucket privé, CORS, sauvegarde quotidienne de
+PostgreSQL et restauration) est décrit dans
+[l'exploitation du stockage](storage.md).
+
 ## PostgreSQL en développement
 
 Depuis la racine du dépôt, avec Docker et Docker Compose installés :
