@@ -6,7 +6,8 @@ d’un fichier dans son **espace personnel**),
 [l’issue #5](https://github.com/OliveLeb/shelf/issues/5) (**dossiers**, renommage,
 déplacement et noms uniques) et [l’issue #8](https://github.com/OliveLeb/shelf/issues/8)
 (**espace commun**) et [l’issue #9](https://github.com/OliveLeb/shelf/issues/9)
-(**partages en Lecture** et **Partagés avec moi**). Le vocabulaire suit [`CONTEXT.md`](../CONTEXT.md).
+(**partages en Lecture** et **Partagés avec moi**), puis [l’issue #11](https://github.com/OliveLeb/shelf/issues/11)
+(**copie indépendante des éléments**). Le vocabulaire suit [`CONTEXT.md`](../CONTEXT.md).
 
 Le contenu des fichiers vit dans un bucket compatible S3 privé et transite
 directement entre le client et le S3 par URL signées de courte durée
@@ -29,6 +30,8 @@ de secrets, jamais dans un fichier versionné :
 | `Storage__S3__AccessKey`, `Storage__S3__SecretKey` | Identifiants limités à ce bucket |
 | `Storage__S3__ForcePathStyle` | `true` pour l’adressage par chemin (MinIO) ; défaut `false` (sous-domaine) |
 | `Storage__SignedUrlMinutes` | Validité des URL signées ; défaut 15 |
+| `Storage__S3__SingleCopyLimitBytes` | Limite de copie S3 simple du fournisseur ; défaut 5368709120 (5 Gio), entre 5 Mio et 5 Gio |
+| `Storage__S3__CopyPartSizeBytes` | Taille des parties de copie ; défaut 134217728 (128 Mio), entre 5 Mio et 5 Gio ; augmentée si nécessaire pour rester sous 10 000 parties |
 
 Le démarrage HTTP échoue si la configuration S3 est incomplète ; les commandes
 `migrate` et `admin` n’en ont pas besoin. La migration `002_storage` crée
@@ -56,6 +59,7 @@ JSON avec `Cache-Control: no-store` et signalent les erreurs par
 | `POST /folders` | `name`, `parentId` (dossier parent ; absent ou `null` : racine), `space` | 201, dossier créé |
 | `POST /elements/{id}/rename` | `name` | 200, élément renommé |
 | `POST /elements/{id}/move` | `parentId` (dossier de destination ; `null` : racine), `space` | 200, élément déplacé |
+| `POST /elements/{id}/copy` | `parentId` (dossier de destination ; `null` : racine), `space` (personnel par défaut) | 201, nouvel élément, avec son nom définitif |
 | `POST /uploads` | `name`, `size`, `contentType` (défaut `application/octet-stream`), `parentId`, `onConflict`, `space` | 201, `{id, url, method, headers, expiresAt}` |
 | `POST /uploads/{id}/complete` | — | 201, fichier créé |
 | `GET /files/{id}/download` | — | 200, `{url, expiresAt}` |
@@ -137,6 +141,48 @@ destinataire (`403`). Un tiers sans partage, administrateur compris, reçoit
 le rend de nouveau invisible. Une URL S3 déjà délivrée reste toutefois valide
 jusqu’à son expiration ; le retrait interdit immédiatement d’en obtenir une nouvelle.
 
+### Copie
+
+Toute personne ayant au moins la Lecture peut copier un fichier ou un dossier
+avec `POST /elements/{id}/copy`. Un corps `{}` copie à la racine de **son propre
+espace personnel**, même si la source est commune ou partagée. `space: "common"`
+sélectionne la racine commune ; `parentId` sélectionne un dossier où l’utilisateur
+peut ajouter. Un dossier visible en Lecture seule répond `403 write_forbidden` ;
+une source ou destination invisible répond `404`, administrateur compris.
+Les dossiers partagés en Écriture seront accessibles avec l’issue #12.
+
+Un dossier est copié avec tous ses descendants, y compris les dossiers vides.
+Les nouveaux éléments ont de nouveaux identifiants, une date d’ajout courante
+et l’utilisateur qui copie comme `addedBy`. Le propriétaire est celui de
+l’espace de destination. Aucun partage de la source, direct ou hérité, n’est
+recopié. Les droits de l’emplacement de destination restent applicables.
+Le nom de la racine copiée est conservé si disponible, sinon renommé selon
+la même règle que `keepBoth` (`photo (1).jpg`, `photo (2).jpg`…), même sous
+concurrence et en cas de conflit avec un dossier. Les noms des descendants
+restent inchangés.
+
+Chaque fichier reçoit une nouvelle clé S3 : `CopyObject` jusqu’à la limite
+configurée, puis `UploadPartCopy` et finalisation en plusieurs parties au-delà.
+Aucun octet du fichier ne transite par l’API. La taille est vérifiée avant la
+copie et l’ETag de la source conditionne chaque requête, pour ne pas assembler
+des parties de contenus différents. Une source modifiée pendant la copie
+répond `409 source_changed`. Modifier ou supprimer un objet ne touche pas à
+l’autre.
+
+La copie est synchrone. Elle verrouille les espaces concernés dans un ordre
+stable et revérifie les droits après l’attente des verrous. Les écritures,
+déplacements et changements de partages attendent sa fin ; les lectures restent
+possibles. Les métadonnées du nouvel arbre ne deviennent visibles qu’après la
+réussite de toute la copie. Copier un dossier dans lui-même ou un descendant
+copie un instantané fini de l’arbre source, sans inclure les nouveaux éléments.
+Configurer les délais du proxy pour les copies longues.
+
+En cas d’échec, la transaction est annulée, les objets déjà copiés sont supprimés
+au mieux et l’envoi en plusieurs parties est annulé. Un arrêt du processus,
+une panne S3 pendant le nettoyage ou un échec du commit PostgreSQL après la
+copie peut laisser des objets orphelins : voir les
+[précautions d’exploitation](../infra/storage.md#copies-côté-serveur).
+
 ### Dossiers
 
 Les dossiers s’imbriquent sans limite de profondeur. Deux éléments d’un même
@@ -210,6 +256,7 @@ selon RFC 5987). Les requêtes partielles (`Range`) sont prises en charge par le
 | 409 | `size_mismatch` | Taille de l’objet différente de la déclaration ; renvoyer le contenu puis confirmer de nouveau |
 | 409 | `name_conflict` | Un élément du même nom, sans tenir compte de la casse, existe déjà dans le dossier |
 | 409 | `folder_cycle` | Déplacement d’un dossier dans lui-même ou un de ses descendants |
+| 409 | `source_changed` | Taille de la source incohérente ou contenu modifié pendant la copie ; réessayer après stabilisation |
 | 503 | `database_unavailable`, `storage_unavailable` | PostgreSQL ou S3 indisponible |
 
 Un élément d’un autre espace personnel sans partage couvrant cet élément répond

@@ -53,5 +53,6 @@ public static class HttpEndpoints
         api.MapPost("/folders", async (FolderRequest input, HttpContext h) => Results.Json(await Db(h).CreateFolder(Current(h), input), statusCode: 201)).Produces<Element>(201).WithSummary("Create a folder");
         api.MapPost("/elements/{id:guid}/rename", async (Guid id, RenameRequest input, HttpContext h) => Results.Ok(await Db(h).Rename(Current(h), id, input))).Produces<Element>().WithSummary("Rename an element");
         api.MapPost("/elements/{id:guid}/move", async (Guid id, MoveRequest input, HttpContext h) => Results.Ok(await Db(h).Move(Current(h), id, input))).Produces<Element>().WithSummary("Move an element");
+        api.MapPost("/elements/{id:guid}/copy", async (Guid id, CopyRequest input, HttpContext h) => Results.Json(await Db(h).Copy(Current(h), id, input), statusCode: 201)).Produces<Element>(201).WithSummary("Copy an element");
     }
 }

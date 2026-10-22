@@ -12,6 +12,10 @@ public sealed class ObjectStore : IDisposable
     private readonly string bucket;
     private readonly Protocol protocol;
     private readonly TimeSpan lifetime;
+    private readonly long singleCopyLimit;
+    private readonly long copyPartSize;
+    private const long MinPartSize = 5L * 1024 * 1024;
+    private const long MaxPartSize = 5L * 1024 * 1024 * 1024;
 
     public ObjectStore(IConfiguration configuration)
     {
@@ -23,6 +27,10 @@ public sealed class ObjectStore : IDisposable
         bucket = Required("Bucket");
         protocol = uri.Scheme == "http" ? Protocol.HTTP : Protocol.HTTPS;
         lifetime = TimeSpan.FromMinutes(configuration.GetValue("Storage:SignedUrlMinutes", 15));
+        singleCopyLimit = s3.GetValue("SingleCopyLimitBytes", MaxPartSize);
+        copyPartSize = s3.GetValue("CopyPartSizeBytes", 128L * 1024 * 1024);
+        if (singleCopyLimit is < MinPartSize or > MaxPartSize || copyPartSize is < MinPartSize or > MaxPartSize)
+            throw new InvalidOperationException("S3 copy sizes must be between 5 MiB and 5 GiB.");
         client = new AmazonS3Client(new BasicAWSCredentials(Required("AccessKey"), Required("SecretKey")), new AmazonS3Config
         {
             ServiceURL = endpoint,
@@ -63,6 +71,64 @@ public sealed class ObjectStore : IDisposable
         try { return (await client.GetObjectMetadataAsync(bucket, key, cancellation)).ContentLength; }
         catch (AmazonS3Exception error) when (error.StatusCode == HttpStatusCode.NotFound) { return null; }
     }
+
+    /// <summary>Creates an independent object within the bucket, without relaying file bytes.</summary>
+    public async Task Copy(string source, string destination, long expectedSize, CancellationToken cancellation)
+    {
+        var metadata = await client.GetObjectMetadataAsync(bucket, source, cancellation);
+        if (metadata.ContentLength != expectedSize) throw new StorageError(409, "source_changed");
+        if (expectedSize <= singleCopyLimit)
+        {
+            await client.CopyObjectAsync(new CopyObjectRequest
+            {
+                SourceBucket = bucket, SourceKey = source, DestinationBucket = bucket, DestinationKey = destination,
+                ETagToMatch = metadata.ETag
+            }, cancellation);
+            return;
+        }
+        // Adapt to large objects without exceeding S3's 10,000 parts or 5 GiB per part.
+        var partSize = Math.Max(copyPartSize, (expectedSize - 1) / 10000 + 1);
+        if (partSize > MaxPartSize) throw new StorageError(503, "storage_unavailable");
+        var upload = await client.InitiateMultipartUploadAsync(new InitiateMultipartUploadRequest
+        {
+            BucketName = bucket, Key = destination, ContentType = metadata.Headers.ContentType
+        }, cancellation);
+        try
+        {
+            var parts = new List<PartETag>();
+            for (long offset = 0; offset < expectedSize; offset += partSize)
+            {
+                var number = parts.Count + 1;
+                var part = await client.CopyPartAsync(new CopyPartRequest
+                {
+                    SourceBucket = bucket, SourceKey = source, DestinationBucket = bucket, DestinationKey = destination,
+                    UploadId = upload.UploadId, PartNumber = number, FirstByte = offset,
+                    LastByte = Math.Min(offset + partSize, expectedSize) - 1, ETagToMatch = [metadata.ETag]
+                }, cancellation);
+                parts.Add(new PartETag(number, part.ETag));
+            }
+            await client.CompleteMultipartUploadAsync(new CompleteMultipartUploadRequest
+            {
+                BucketName = bucket, Key = destination, UploadId = upload.UploadId, PartETags = parts
+            }, cancellation);
+        }
+        catch
+        {
+            using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            try
+            {
+                await client.AbortMultipartUploadAsync(new AbortMultipartUploadRequest
+                {
+                    BucketName = bucket, Key = destination, UploadId = upload.UploadId
+                }, cleanup.Token);
+            }
+            catch (Exception error) when (error is AmazonServiceException or HttpRequestException or OperationCanceledException)
+            { /* Bucket lifecycle rules must also abort abandoned multipart uploads after a crash. */ }
+            throw;
+        }
+    }
+
+    public Task Delete(string key, CancellationToken cancellation) => client.DeleteObjectAsync(bucket, key, cancellation);
 
     private static string Attachment(string fileName)
     {
