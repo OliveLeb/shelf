@@ -15,7 +15,7 @@ public sealed partial class AuthTransaction
         await Run("INSERT INTO sessions VALUES ($1,$2,$3,$4,$5,$5,$6)", id, account.Id, Fingerprint(token), input.DeviceName ?? "Unknown device", Now, expires);
         return new(account, id, token, expires);
     }
-    public async Task<Actor> Authenticate(string? authorization, bool admin)
+    public async Task<Actor> Authenticate(string? authorization, bool admin, bool accountMutation = true)
     {
         if (authorization is null || !authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)) throw new AuthError(401, "authentication_required");
         var token = authorization[7..];
@@ -23,8 +23,13 @@ public sealed partial class AuthTransaction
         var rows = await Query("SELECT id, account_id FROM sessions WHERE token_hash=$1 AND expires_at>$2", r => (Id: r.GetGuid(0), AccountId: r.GetGuid(1)), Fingerprint(token), Now);
         if (rows.Count == 0) throw new AuthError(401, "authentication_required");
         var session = rows[0];
-        var account = await AccountById(session.AccountId);
-        if (!account.IsActive) throw new AuthError(401, "authentication_required");
+        // Lock the account before touching its session, through the transaction's commit.
+        // Deletion/disable either finishes first (deny access), or waits for this authorized operation.
+        // Auth operations may mutate their own account: block storage's SHARE before locking the
+        // session, without blocking foreign key checks from other accounts' storage operations.
+        // Storage shares the lock; KEY SHARE would not block a disable, which only changes is_active.
+        var account = (await Query($"SELECT {AccountColumns} FROM accounts WHERE id=$1 FOR {(accountMutation ? "NO KEY UPDATE" : "SHARE")}", ReadAccount, session.AccountId)).SingleOrDefault();
+        if (account is null || !account.IsActive) throw new AuthError(401, "authentication_required");
         if (admin && !account.IsAdmin) throw new AuthError(403, "administrator_required");
         await Run("UPDATE sessions SET last_seen_at=$2, expires_at=$3 WHERE id=$1", session.Id, Now, Now.AddDays(30));
         return new(account, session.Id);
