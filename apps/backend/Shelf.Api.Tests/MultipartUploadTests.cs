@@ -155,6 +155,11 @@ public sealed class MultipartUploadTests : TestInstance
 
         Assert.Equal(HttpStatusCode.Unauthorized, (await Confirm(member, large)).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await Confirm(member, simple)).StatusCode);
+        // Purged at expiry, once no signed URL can recreate the object.
+        await Task.Delay(500);
+        Assert.Single(await PendingMultipartUploads());
+        Assert.Single(await Objects());
+        Clock.Advance(TimeSpan.FromHours(24));
         await Eventually(async () => (await PendingMultipartUploads()).Length == 0 && (await Objects()).Length == 0);
     }
 }

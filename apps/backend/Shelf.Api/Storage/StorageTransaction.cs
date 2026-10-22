@@ -100,10 +100,11 @@ public sealed class StorageTransaction(NpgsqlConnection connection, NpgsqlTransa
         return await Get(id);
     }
 
-    /// <summary>Purges one upload that expired or lost its account or destination, with its parts and object; false when none is left.</summary>
-    public async Task<bool> PurgeAbandonedUpload()
+    /// <summary>Purges one expired upload with its parts and object; false when none is left.</summary>
+    // Uploads that lost their account or destination wait for their expiry too: a signed URL may stay valid until then.
+    public async Task<bool> PurgeExpiredUpload()
     {
-        var uploads = await Query("SELECT id, object_key, multipart_id FROM uploads WHERE created_at <= $1 OR account_id IS NULL OR space_id IS NULL LIMIT 1 FOR UPDATE SKIP LOCKED",
+        var uploads = await Query("SELECT id, object_key, multipart_id FROM uploads WHERE created_at <= $1 LIMIT 1 FOR UPDATE SKIP LOCKED",
             r => (Id: r.GetGuid(0), Key: r.GetString(1), MultipartId: r.IsDBNull(2) ? null : r.GetString(2)), clock.GetUtcNow() - store.UploadExpiry);
         if (uploads.Count == 0) return false;
         await store.Discard(uploads[0].Key, uploads[0].MultipartId, cancellation);
@@ -113,8 +114,8 @@ public sealed class StorageTransaction(NpgsqlConnection connection, NpgsqlTransa
 
     private async Task<Upload> PendingUpload(Account account, Guid uploadId)
     {
-        // An expired upload is gone for the client, even before the cleanup task purges it.
-        var uploads = await Query("SELECT id, space_id, name, size, content_type, object_key, multipart_id, part_size, created_at, parent_id, on_conflict FROM uploads WHERE id=$1 AND account_id=$2 AND created_at > $3 FOR UPDATE",
+        // An expired upload or one without a destination is gone for the client before cleanup.
+        var uploads = await Query("SELECT id, space_id, name, size, content_type, object_key, multipart_id, part_size, created_at, parent_id, on_conflict FROM uploads WHERE id=$1 AND account_id=$2 AND space_id IS NOT NULL AND created_at > $3 FOR UPDATE",
             r => new Upload(r.GetGuid(0), r.GetGuid(1), r.GetString(2), r.GetInt64(3), r.GetString(4), r.GetString(5), r.IsDBNull(6) ? null : r.GetString(6), r.GetInt64(7), r.GetFieldValue<DateTimeOffset>(8), r.IsDBNull(9) ? null : r.GetGuid(9), !r.IsDBNull(10)),
             uploadId, account.Id, clock.GetUtcNow() - store.UploadExpiry);
         if (uploads.Count == 0) throw new StorageError(404, "upload_not_found");

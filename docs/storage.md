@@ -123,6 +123,14 @@ fichier est renommé automatiquement à la confirmation : `photo.jpg` devient
 `photo (1).jpg`, puis `photo (2).jpg`… Le nom définitif figure dans la réponse
 de la confirmation.
 
+**Expiration.** Un envoi non confirmé expire `Storage__UploadExpiryHours` après
+sa déclaration : il répond alors `upload_not_found`, et les URL signées ne
+restent jamais valables au-delà. Une tâche de fond annule ses parties en attente
+et supprime son objet du bucket. En cas de panne de PostgreSQL ou du S3, elle
+réessaie au tour suivant. Un envoi dont le compte ou la destination a disparu ne
+peut plus être confirmé ; il est purgé de même à son expiration, quand plus
+aucune URL signée ne permet d’y écrire.
+
 Le bucket doit autoriser le CORS de l’origine cliente pour les transferts depuis
 un navigateur : voir [la règle CORS](../infra/storage.md#cors-du-bucket-des-fichiers).
 

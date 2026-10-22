@@ -2,7 +2,7 @@ using Npgsql;
 
 namespace Shelf.Api.Storage;
 
-/// <summary>Background task that purges expired or orphaned uploads: it aborts their multipart uploads and deletes their objects.</summary>
+/// <summary>Background task that purges expired uploads: it aborts their multipart uploads and deletes their objects.</summary>
 public sealed class UploadCleanup(NpgsqlDataSource source, ObjectStore store, TimeProvider clock, ILogger<UploadCleanup> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stopping)
@@ -20,7 +20,7 @@ public sealed class UploadCleanup(NpgsqlDataSource source, ObjectStore store, Ti
     {
         await using var connection = await source.OpenConnectionAsync(cancellation);
         await using var transaction = await connection.BeginTransactionAsync(cancellation);
-        var purged = await new StorageTransaction(connection, transaction, store, clock, cancellation).PurgeAbandonedUpload();
+        var purged = await new StorageTransaction(connection, transaction, store, clock, cancellation).PurgeExpiredUpload();
         await transaction.CommitAsync(cancellation);
         return purged;
     }
