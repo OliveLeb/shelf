@@ -1,12 +1,18 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.OpenApi;
 using Shelf.Api.Authentication;
+using Shelf.Api.Storage;
 
 var command = args.FirstOrDefault() is "migrate" or "admin";
 var builder = WebApplication.CreateBuilder(command ? [] : args);
 // Build-time OpenAPI generation (contracts/openapi.json) starts the app without deployment configuration.
 if (System.Reflection.Assembly.GetEntryAssembly()?.GetName().Name == "GetDocument.Insider")
+{
     builder.Configuration["Authentication:ClientOrigin"] ??= "http://localhost";
+    builder.Configuration["Storage:S3:Endpoint"] ??= "http://localhost";
+    foreach (var key in new[] { "Bucket", "AccessKey", "SecretKey", "Region" })
+        builder.Configuration[$"Storage:S3:{key}"] ??= "openapi";
+}
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 16 * 1024);
 builder.Services.AddHealthChecks();
 builder.Services.AddOpenApi(options =>
@@ -29,6 +35,7 @@ builder.Services.AddOpenApi(options =>
     });
 });
 builder.AddAuthenticationBackend();
+builder.AddStorageBackend();
 var app = builder.Build();
 if (command)
 {
@@ -48,6 +55,7 @@ else
     if (app.Environment.IsDevelopment()) app.MapOpenApi();
     app.MapHealthChecks("/health");
     app.MapAuthenticationBackend();
+    app.MapStorageBackend();
     app.Run();
 }
 

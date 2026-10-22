@@ -1,0 +1,10 @@
+services:
+  minio:
+    # S3-compatible storage for local development and integration tests (see infra/README.md).
+    # Credentials match .env.example and the integration test defaults; local use only.
+    command: mkdir -p "$HOME/.local/share/shelf-minio" && exec "$HOME/.local/bin/minio" server "$HOME/.local/share/shelf-minio" --address 127.0.0.1:9000 --console-address 127.0.0.1:9001
+    port: 9000
+    health: /minio/health/live
+    env:
+      MINIO_ROOT_USER: shelf
+      MINIO_ROOT_PASSWORD: change-me-local-only

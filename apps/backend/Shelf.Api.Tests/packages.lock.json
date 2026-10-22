@@ -40,6 +40,19 @@
         "resolved": "3.1.1",
         "contentHash": "gNu2zhnuwjq5vQlU4S7yK/lfaKZDLmtcu+vTjnhfTlMAUYn+Hmgu8IIX0UCwWepYkk+Szx03DHx1bDnc9Fd+9w=="
       },
+      "AWSSDK.Core": {
+        "type": "Transitive",
+        "resolved": "4.0.102.12",
+        "contentHash": "/wJwMdRT5e9AbqRFfeazbyAbAZijYMDGlLDGAc07Ob2tPdeEUE0dC0zISIdtdWtCu0lV+oWf3qcsevpd7ejn9g=="
+      },
+      "AWSSDK.S3": {
+        "type": "Transitive",
+        "resolved": "4.0.104.5",
+        "contentHash": "w2+eFmm6Ueu/n+RnFE76iPyxhhiK0DFup6IZTZoNf8TS+KK/ZCfHq7y1ioAXefLDvVUTkIYXbUoPdNBoOevY9g==",
+        "dependencies": {
+          "AWSSDK.Core": "[4.0.102.12, 5.0.0)"
+        }
+      },
       "Microsoft.AspNetCore.OpenApi": {
         "type": "Transitive",
         "resolved": "10.0.13",
@@ -422,6 +435,7 @@
       "shelf.api": {
         "type": "Project",
         "dependencies": {
+          "AWSSDK.S3": "[4.0.104.5, )",
           "Microsoft.AspNetCore.OpenApi": "[10.0.13, )",
           "Npgsql": "[10.0.3, )"
         }

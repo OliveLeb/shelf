@@ -26,13 +26,15 @@ public sealed class Database(NpgsqlDataSource source)
     public Task<int> Migrate(TimeProvider clock) => Execute(async db =>
     {
         await db.Run("CREATE TABLE IF NOT EXISTS schema_migrations (version integer PRIMARY KEY)");
-        if (await db.Scalar("SELECT count(*) FROM schema_migrations WHERE version=1") is long count && count == 0)
+        const string prefix = "Shelf.Api.Migrations.";
+        var assembly = Assembly.GetExecutingAssembly();
+        foreach (var resource in assembly.GetManifestResourceNames().Where(name => name.StartsWith(prefix, StringComparison.Ordinal)).Order(StringComparer.Ordinal))
         {
-            using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("Shelf.Api.Migrations.001_authentication.sql")
-                ?? throw new InvalidOperationException("Missing authentication migration.");
-            using var reader = new StreamReader(stream);
+            var version = int.Parse(resource[prefix.Length..].Split('_')[0]);
+            if (await db.Scalar("SELECT count(*) FROM schema_migrations WHERE version=$1", version) is long count && count > 0) continue;
+            using var reader = new StreamReader(assembly.GetManifestResourceStream(resource)!);
             await db.Run(await reader.ReadToEndAsync());
-            await db.Run("INSERT INTO schema_migrations VALUES (1)");
+            await db.Run("INSERT INTO schema_migrations VALUES ($1)", version);
         }
         return 0;
     }, clock);

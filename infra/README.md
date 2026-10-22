@@ -71,3 +71,39 @@ docker compose up -d --wait postgres
 Sauvegarder les données avant une mise à jour. Un changement de version majeure
 nécessite une migration avec `pg_upgrade` ou un export/import. La commande
 `docker compose down --volumes` supprime définitivement les données locales.
+
+## MinIO en développement
+
+`compose.yaml` fournit MinIO, service compatible S3, pour le développement et
+les tests d'intégration du [stockage](../docs/storage.md) :
+
+```sh
+cp .env.example .env   # puis choisir MINIO_ROOT_USER et MINIO_ROOT_PASSWORD
+docker compose up -d --wait minio
+```
+
+L'API S3 écoute sur `127.0.0.1:9000` (`MINIO_PORT`) et la console web sur
+`127.0.0.1:9001` (`MINIO_CONSOLE_PORT`). Les identifiants racine viennent de
+`.env`, ignoré par Git ; les valeurs de `.env.example` sont réservées au poste
+local. Les objets sont conservés dans le volume `minio_data`.
+
+MinIO n'est plus publié par son éditeur (dépôt archivé, images officielles
+retirées). Compose utilise `chainguard/minio`, reconstruit depuis les sources de
+MinIO. Ce service ne sert qu'au développement ; en production, utiliser un
+fournisseur compatible S3 maintenu.
+
+Créer le bucket de développement, puis configurer l'API :
+
+```sh
+curl --aws-sigv4 aws:amz:us-east-1:s3 --user "$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD" \
+  -X PUT http://localhost:9000/shelf
+export Storage__S3__Endpoint=http://localhost:9000
+export Storage__S3__Region=us-east-1
+export Storage__S3__Bucket=shelf
+export Storage__S3__AccessKey="$MINIO_ROOT_USER"
+export Storage__S3__SecretKey="$MINIO_ROOT_PASSWORD"
+export Storage__S3__ForcePathStyle=true
+```
+
+Les tests d'intégration créent et suppriment leur propre bucket par cas de test
+(voir [le backend](../apps/backend/README.md)).
