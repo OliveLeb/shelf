@@ -4,7 +4,7 @@ using Shelf.Api.Authentication;
 namespace Shelf.Api.Storage;
 
 /// <summary>Storage operations in one PostgreSQL transaction, without the account advisory lock.</summary>
-public sealed class StorageTransaction(NpgsqlConnection connection, NpgsqlTransaction transaction, ObjectStore store, TimeProvider clock, CancellationToken cancellation)
+public sealed partial class StorageTransaction(NpgsqlConnection connection, NpgsqlTransaction transaction, ObjectStore store, TimeProvider clock, CancellationToken cancellation)
 {
     private const string ElementColumns = "e.id, e.kind, e.name, e.parent_id, e.size, e.content_type, e.added_at, a.id, a.username FROM elements e JOIN spaces s ON s.id=e.space_id LEFT JOIN accounts a ON a.id=e.added_by";
     private static Element ReadElement(NpgsqlDataReader r) => new(r.GetGuid(0), r.GetString(1), r.GetString(2),
@@ -17,7 +17,7 @@ public sealed class StorageTransaction(NpgsqlConnection connection, NpgsqlTransa
     {
         if (!Sorts.TryGetValue(sort ?? "name", out var key)) throw new StorageError(400, "invalid_sort");
         if ((order ??= "asc") is not ("asc" or "desc")) throw new StorageError(400, "invalid_order");
-        var destination = await Destination(account, folderId, space);
+        var destination = await Destination(account, folderId, space, writable: false);
         return await Query($"SELECT {ElementColumns} WHERE e.space_id=$1 AND e.parent_id IS NOT DISTINCT FROM $2 ORDER BY e.kind='file', {string.Format(key, order)}, lower(e.name), e.id",
             ReadElement, destination, folderId);
     }
@@ -83,8 +83,10 @@ public sealed class StorageTransaction(NpgsqlConnection connection, NpgsqlTransa
 
     public async Task<SignedUrl> Download(Account account, Guid fileId)
     {
-        var files = await Query("SELECT e.name, e.object_key FROM elements e JOIN spaces s ON s.id=e.space_id WHERE e.id=$1 AND e.kind='file' AND (s.owner_id=$2 OR s.owner_id IS NULL)",
-            r => (Name: r.GetString(0), Key: r.GetString(1)), fileId, account.Id);
+        var access = await Access(account, fileId);
+        if (access.Kind != "file") throw new StorageError(404, "element_not_found");
+        var files = await Query("SELECT name, object_key FROM elements WHERE id=$1",
+            r => (Name: r.GetString(0), Key: r.GetString(1)), fileId);
         if (files.Count == 0) throw new StorageError(404, "element_not_found");
         return store.SignedDownload(files[0].Key, files[0].Name);
     }
@@ -94,8 +96,9 @@ public sealed class StorageTransaction(NpgsqlConnection connection, NpgsqlTransa
     {
         var name = Name(input.Name);
         await LockSpaces(account);
-        if (await Scalar("UPDATE elements e SET name=$3 FROM spaces s WHERE s.id=e.space_id AND e.id=$1 AND (s.owner_id=$2 OR s.owner_id IS NULL) RETURNING e.id", elementId, account.Id, name) is null)
-            throw new StorageError(404, "element_not_found");
+        var access = await Access(account, elementId);
+        if (!access.CanWrite) throw new StorageError(403, "write_forbidden");
+        await Run("UPDATE elements SET name=$2 WHERE id=$1", elementId, name);
         return await Get(elementId);
     }
 
@@ -103,9 +106,10 @@ public sealed class StorageTransaction(NpgsqlConnection connection, NpgsqlTransa
     public async Task<Element> Move(Account account, Guid elementId, MoveRequest input)
     {
         await LockSpaces(account, moving: true);
-        if (await Scalar("SELECT e.space_id FROM elements e JOIN spaces s ON s.id=e.space_id WHERE e.id=$1 AND (s.owner_id=$2 OR s.owner_id IS NULL)", elementId, account.Id) is not Guid space)
-            throw new StorageError(404, "element_not_found");
-        var common = await Scalar("SELECT 1 FROM spaces WHERE id=$1 AND owner_id IS NULL", space) is not null;
+        var access = await Access(account, elementId);
+        if (!access.CanWrite) throw new StorageError(403, "write_forbidden");
+        var space = access.Space;
+        var common = access.Owner is null;
         var destination = await Destination(account, input.ParentId, input.Space ?? (input.ParentId is null && common ? "common" : null));
         if (common && destination != space) throw new StorageError(403, "common_to_personal_forbidden");
         if (input.ParentId is not null && await Scalar("""
@@ -124,7 +128,9 @@ public sealed class StorageTransaction(NpgsqlConnection connection, NpgsqlTransa
                     UNION ALL SELECT e.id FROM elements e JOIN subtree p ON e.parent_id=p.id),
                 moved AS (
                     UPDATE elements SET space_id=$2, parent_id=CASE WHEN id=$1 THEN $3::uuid ELSE parent_id END
-                    WHERE id IN (SELECT id FROM subtree) RETURNING id)
+                    WHERE id IN (SELECT id FROM subtree) RETURNING id),
+                removed_shares AS (
+                    DELETE FROM shares WHERE element_id IN (SELECT id FROM moved))
                 UPDATE uploads SET space_id=$2 WHERE parent_id IN (SELECT id FROM moved)
                 """, elementId, destination, input.ParentId);
         return await Get(elementId);
@@ -136,17 +142,17 @@ public sealed class StorageTransaction(NpgsqlConnection connection, NpgsqlTransa
     private Task LockSpaces(Account account, bool moving = false) => Run($"SELECT id FROM spaces WHERE owner_id=$1 OR owner_id IS NULL ORDER BY id FOR {(moving ? "NO KEY UPDATE" : "SHARE")}", account.Id);
 
     /// <summary>Space of a visible folder, or the selected root (personal by default). An explicit space must match the folder.</summary>
-    private async Task<Guid> Destination(Account account, Guid? folderId, string? space = null)
+    private async Task<Guid> Destination(Account account, Guid? folderId, string? space = null, bool writable = true)
     {
         if (space is not (null or "personal" or "common")) throw new StorageError(400, "invalid_space");
         if (folderId is null)
             return (Guid)(await Scalar(space == "common" ? "SELECT id FROM spaces WHERE owner_id IS NULL" : "SELECT id FROM spaces WHERE owner_id=$1",
                 space == "common" ? [] : [account.Id]))!;
-        return await Scalar("""
-            SELECT e.space_id FROM elements e JOIN spaces s ON s.id=e.space_id
-            WHERE e.id=$1 AND e.kind='folder' AND (s.owner_id=$2 OR s.owner_id IS NULL)
-            AND ($3::text IS NULL OR ($3='common' AND s.owner_id IS NULL) OR ($3='personal' AND s.owner_id=$2))
-            """, folderId, account.Id, space) as Guid? ?? throw new StorageError(404, "folder_not_found");
+        var access = await Access(account, folderId.Value, "folder_not_found");
+        if (access.Kind != "folder" || space == "common" && access.Owner is not null || space == "personal" && access.Owner is null)
+            throw new StorageError(404, "folder_not_found");
+        if (writable && !access.CanWrite) throw new StorageError(403, "write_forbidden");
+        return access.Space;
     }
 
     private async Task<Element> Get(Guid id) => (await Query($"SELECT {ElementColumns} WHERE e.id=$1", ReadElement, id)).Single();

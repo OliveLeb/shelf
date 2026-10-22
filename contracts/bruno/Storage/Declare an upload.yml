@@ -1,7 +1,7 @@
 info:
   name: Declare an upload
   type: http
-  seq: 3
+  seq: 7
   tags:
     - Storage
 
