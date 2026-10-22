@@ -1,0 +1,45 @@
+info:
+  name: Delete own account
+  type: http
+  seq: 2
+  tags:
+    - Account
+
+http:
+  method: DELETE
+  url: "{{baseUrl}}/account"
+  body:
+    type: json
+    data: |-
+      {
+        "currentPassword": ""
+      }
+  auth:
+    type: bearer
+    token: "{{token}}"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+examples:
+  - name: 204 Response
+    description: No Content
+    request:
+      url: "{{baseUrl}}/account"
+      method: DELETE
+      body:
+        type: json
+        data: |-
+          {
+            "currentPassword": ""
+          }
+    response:
+      status: 204
+      statusText: No Content
+      body:
+        type: text
+        data: ""

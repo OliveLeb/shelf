@@ -1,0 +1,41 @@
+info:
+  name: Disable an account
+  type: http
+  seq: 2
+  tags:
+    - Admin
+
+http:
+  method: POST
+  url: "{{baseUrl}}/admin/accounts/:id/disable"
+  params:
+    - name: id
+      value: ""
+      type: path
+  auth:
+    type: bearer
+    token: "{{token}}"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+examples:
+  - name: 204 Response
+    description: No Content
+    request:
+      url: "{{baseUrl}}/admin/accounts/:id/disable"
+      method: POST
+      params:
+        - name: id
+          value: ""
+          type: path
+    response:
+      status: 204
+      statusText: No Content
+      body:
+        type: text
+        data: ""

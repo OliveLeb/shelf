@@ -1,9 +1,33 @@
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.OpenApi;
 using Shelf.Api.Authentication;
 
 var command = args.FirstOrDefault() is "migrate" or "admin";
 var builder = WebApplication.CreateBuilder(command ? [] : args);
+// Build-time OpenAPI generation (contracts/openapi.json) starts the app without deployment configuration.
+if (System.Reflection.Assembly.GetEntryAssembly()?.GetName().Name == "GetDocument.Insider")
+    builder.Configuration["Authentication:ClientOrigin"] ??= "http://localhost";
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 16 * 1024);
 builder.Services.AddHealthChecks();
+builder.Services.AddOpenApi(options =>
+{
+    // Routes require a session token unless they are marked AllowAnonymous().
+    options.AddDocumentTransformer((document, _, _) =>
+    {
+        document.Info.Title = "Shelf API";
+        document.Servers = [new OpenApiServer { Url = "http://localhost:5050", Description = "Local" }];
+        document.Components ??= new();
+        document.Components.SecuritySchemes ??= new Dictionary<string, IOpenApiSecurityScheme>();
+        document.Components.SecuritySchemes["Bearer"] = new OpenApiSecurityScheme { Type = SecuritySchemeType.Http, Scheme = "bearer" };
+        return Task.CompletedTask;
+    });
+    options.AddOperationTransformer((operation, context, _) =>
+    {
+        if (!context.Description.ActionDescriptor.EndpointMetadata.OfType<IAllowAnonymous>().Any())
+            (operation.Security ??= []).Add(new OpenApiSecurityRequirement { [new OpenApiSecuritySchemeReference("Bearer", context.Document)] = [] });
+        return Task.CompletedTask;
+    });
+});
 builder.AddAuthenticationBackend();
 var app = builder.Build();
 if (command)
@@ -21,6 +45,7 @@ if (command)
 }
 else
 {
+    if (app.Environment.IsDevelopment()) app.MapOpenApi();
     app.MapHealthChecks("/health");
     app.MapAuthenticationBackend();
     app.Run();

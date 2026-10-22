@@ -62,28 +62,28 @@ public static class HttpEndpoints
             catch (NpgsqlException) { return Results.Json(new { error = "database_unavailable" }, statusCode: 503); }
         });
 
-        api.MapPost("/auth/register", async (Registration input, HttpContext h) => Results.Json(await Db(h).Register(input), statusCode: 201)).RequireRateLimiting("public-auth");
-        api.MapPost("/auth/login", async (Login input, HttpContext h) => Results.Ok(await Db(h).Login(input))).RequireRateLimiting("public-auth");
-        api.MapPost("/auth/reset-password", async (ResetPassword input, HttpContext h) => { await Db(h).Reset(input); return Results.NoContent(); }).RequireRateLimiting("public-auth");
+        api.MapPost("/auth/register", async (Registration input, HttpContext h) => Results.Json(await Db(h).Register(input), statusCode: 201)).Produces<Account>(201).WithTags("Authentication").AllowAnonymous().RequireRateLimiting("public-auth").WithSummary("Register with an invitation");
+        api.MapPost("/auth/login", async (Login input, HttpContext h) => Results.Ok(await Db(h).Login(input))).Produces<LoginResult>().WithTags("Authentication").AllowAnonymous().RequireRateLimiting("public-auth").WithSummary("Log in");
+        api.MapPost("/auth/reset-password", async (ResetPassword input, HttpContext h) => { await Db(h).Reset(input); return Results.NoContent(); }).Produces(204).WithTags("Authentication").AllowAnonymous().RequireRateLimiting("public-auth").WithSummary("Reset password with a reset link");
 
-        var user = api.MapGroup("").WithMetadata(new Access(false));
-        user.MapGet("/account", (HttpContext h) => Results.Ok(Current(h).Account));
-        user.MapPatch("/account/username", async (UsernameChange input, HttpContext h) => Results.Ok(await Db(h).ChangeUsername(Current(h), input.Username)));
-        user.MapPatch("/account/email", async (EmailChange input, HttpContext h) => Results.Ok(await Db(h).ChangeEmail(Current(h), input)));
-        user.MapPatch("/account/password", async (PasswordChange input, HttpContext h) => { await Db(h).ChangePassword(Current(h), input); return Results.NoContent(); });
-        user.MapDelete("/account", async (HttpContext h, [Microsoft.AspNetCore.Mvc.FromBody] PasswordConfirmation input) => { await Db(h).Delete(Current(h).Account.Id, input.CurrentPassword, self: true); return Results.NoContent(); });
-        user.MapGet("/account/sessions", async (HttpContext h, CancellationToken _) => Results.Ok(await Db(h).Sessions(Current(h))));
-        user.MapDelete("/account/sessions/{id:guid}", async (Guid id, HttpContext h) => { await Db(h).RevokeSession(Current(h), id); return Results.NoContent(); });
-        user.MapDelete("/account/sessions", async (HttpContext h, CancellationToken _) => { await Db(h).RevokeAll(Current(h).Account.Id); return Results.NoContent(); });
-        user.MapPost("/auth/logout", async (HttpContext h, CancellationToken _) => { await Db(h).RevokeSession(Current(h), Current(h).SessionId); return Results.NoContent(); });
+        var user = api.MapGroup("").WithMetadata(new Access(false)).WithTags("Account");
+        user.MapGet("/account", (HttpContext h) => Results.Ok(Current(h).Account)).Produces<Account>().WithSummary("Get current account");
+        user.MapPatch("/account/username", async (UsernameChange input, HttpContext h) => Results.Ok(await Db(h).ChangeUsername(Current(h), input.Username))).Produces<Account>().WithSummary("Change username");
+        user.MapPatch("/account/email", async (EmailChange input, HttpContext h) => Results.Ok(await Db(h).ChangeEmail(Current(h), input))).Produces<Account>().WithSummary("Change email");
+        user.MapPatch("/account/password", async (PasswordChange input, HttpContext h) => { await Db(h).ChangePassword(Current(h), input); return Results.NoContent(); }).Produces(204).WithSummary("Change password");
+        user.MapDelete("/account", async (HttpContext h, [Microsoft.AspNetCore.Mvc.FromBody] PasswordConfirmation input) => { await Db(h).Delete(Current(h).Account.Id, input.CurrentPassword, self: true); return Results.NoContent(); }).Produces(204).WithSummary("Delete own account");
+        user.MapGet("/account/sessions", async (HttpContext h, CancellationToken _) => Results.Ok(await Db(h).Sessions(Current(h)))).Produces<List<SessionInfo>>().WithSummary("List active sessions");
+        user.MapDelete("/account/sessions/{id:guid}", async (Guid id, HttpContext h) => { await Db(h).RevokeSession(Current(h), id); return Results.NoContent(); }).Produces(204).WithSummary("Revoke a session");
+        user.MapDelete("/account/sessions", async (HttpContext h, CancellationToken _) => { await Db(h).RevokeAll(Current(h).Account.Id); return Results.NoContent(); }).Produces(204).WithSummary("Revoke all sessions");
+        user.MapPost("/auth/logout", async (HttpContext h, CancellationToken _) => { await Db(h).RevokeSession(Current(h), Current(h).SessionId); return Results.NoContent(); }).Produces(204).WithSummary("Log out");
 
-        var admin = api.MapGroup("/admin").WithMetadata(new Access(true));
-        admin.MapGet("/accounts", async (HttpContext h, CancellationToken _) => Results.Ok(await Db(h).Accounts()));
-        admin.MapPost("/accounts/{id:guid}/disable", async (Guid id, HttpContext h) => { await Db(h).Disable(id); return Results.NoContent(); });
-        admin.MapDelete("/accounts/{id:guid}", async (Guid id, HttpContext h) => { await Db(h).Delete(id); return Results.NoContent(); });
-        admin.MapPost("/accounts/{id:guid}/password-reset", async (Guid id, HttpContext h) => Results.Ok(await Db(h).CreateReset(id, origin)));
-        admin.MapPost("/invitations", async (InvitationRequest input, HttpContext h) => Results.Json(await Db(h).Invite(input.Email, origin), statusCode: 201));
-        admin.MapGet("/invitations", async (HttpContext h, CancellationToken _) => Results.Ok(await Db(h).Invitations()));
-        admin.MapDelete("/invitations/{id:guid}", async (Guid id, HttpContext h) => { await Db(h).RevokeInvitation(id); return Results.NoContent(); });
+        var admin = api.MapGroup("/admin").WithMetadata(new Access(true)).WithTags("Admin");
+        admin.MapGet("/accounts", async (HttpContext h, CancellationToken _) => Results.Ok(await Db(h).Accounts())).Produces<List<Account>>().WithSummary("List accounts");
+        admin.MapPost("/accounts/{id:guid}/disable", async (Guid id, HttpContext h) => { await Db(h).Disable(id); return Results.NoContent(); }).Produces(204).WithSummary("Disable an account");
+        admin.MapDelete("/accounts/{id:guid}", async (Guid id, HttpContext h) => { await Db(h).Delete(id); return Results.NoContent(); }).Produces(204).WithSummary("Delete an account");
+        admin.MapPost("/accounts/{id:guid}/password-reset", async (Guid id, HttpContext h) => Results.Ok(await Db(h).CreateReset(id, origin))).Produces<ResetLink>().WithSummary("Create a password reset link");
+        admin.MapPost("/invitations", async (InvitationRequest input, HttpContext h) => Results.Json(await Db(h).Invite(input.Email, origin), statusCode: 201)).Produces<InvitationLink>(201).WithSummary("Invite by email");
+        admin.MapGet("/invitations", async (HttpContext h, CancellationToken _) => Results.Ok(await Db(h).Invitations())).Produces<List<InvitationInfo>>().WithSummary("List invitations");
+        admin.MapDelete("/invitations/{id:guid}", async (Guid id, HttpContext h) => { await Db(h).RevokeInvitation(id); return Results.NoContent(); }).Produces(204).WithSummary("Revoke an invitation");
     }
 }

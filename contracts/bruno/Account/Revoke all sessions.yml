@@ -1,0 +1,33 @@
+info:
+  name: Revoke all sessions
+  type: http
+  seq: 7
+  tags:
+    - Account
+
+http:
+  method: DELETE
+  url: "{{baseUrl}}/account/sessions"
+  auth:
+    type: bearer
+    token: "{{token}}"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+examples:
+  - name: 204 Response
+    description: No Content
+    request:
+      url: "{{baseUrl}}/account/sessions"
+      method: DELETE
+    response:
+      status: 204
+      statusText: No Content
+      body:
+        type: text
+        data: ""

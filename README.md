@@ -7,7 +7,7 @@ Application de stockage de photos, vidéos et fichiers.
 - `apps/backend/` : API ASP.NET Core (.NET 10) et solution .NET.
 - `apps/web/` : future application web, technologie à choisir.
 - `apps/mobile/` : future application mobile, technologie à choisir.
-- `contracts/` : futurs contrats OpenAPI et génération des clients.
+- `contracts/` : contrat OpenAPI généré et collection Bruno.
 - `compose.yaml` : PostgreSQL pour le développement local.
 - `infra/` : documentation des services et du déploiement.
 - `docs/` : documentation du projet et décisions techniques.

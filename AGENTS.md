@@ -19,3 +19,7 @@ Les messages de commit suivent Conventional Commits et sont rédigés en anglais
 ### Branches et PR brouillon
 
 Chaque issue travaillée a sa branche dédiée ; une PR brouillon est ouverte dès la création de la branche. Voir `docs/agents/issue-tracker.md`.
+
+### Contrat API
+
+Toute route HTTP ajoutée, modifiée ou supprimée met à jour `contracts/openapi.json` et la collection Bruno `contracts/bruno/` dans le même commit (`./contracts/generate.sh`). Voir `docs/agents/api-contract.md`.

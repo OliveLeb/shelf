@@ -38,6 +38,10 @@ curl --fail http://localhost:5050/health
 
 Dans un orb Amp, lancer le serveur via `amp orb services ensure` (ou `amp orb service start`) plutôt qu'en tâche de fond, et ne jamais donner d'URL localhost brute à l'utilisateur — partager l'URL de portail.
 
+## Contrat API
+
+Toute route ajoutée, modifiée ou supprimée doit déclarer résumé, tags, réponses et accès, puis régénérer `contracts/openapi.json` et la collection Bruno avec `./contracts/generate.sh`, dans le même commit (voir `docs/agents/api-contract.md`).
+
 ## Tests
 
 Aucun projet de test n'existe encore. Quand on en crée un :

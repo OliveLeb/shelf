@@ -1,0 +1,57 @@
+info:
+  name: Register with an invitation
+  type: http
+  seq: 1
+  tags:
+    - Authentication
+
+http:
+  method: POST
+  url: "{{baseUrl}}/auth/register"
+  body:
+    type: json
+    data: |-
+      {
+        "token": "",
+        "username": "",
+        "password": ""
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+examples:
+  - name: 201 Response
+    description: Created
+    request:
+      url: "{{baseUrl}}/auth/register"
+      method: POST
+      body:
+        type: json
+        data: |-
+          {
+            "token": "",
+            "username": "",
+            "password": ""
+          }
+    response:
+      status: 201
+      statusText: Created
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "id": "",
+            "username": "",
+            "email": "",
+            "isAdmin": false,
+            "isActive": false
+          }

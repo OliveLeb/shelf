@@ -1,0 +1,46 @@
+info:
+  name: List invitations
+  type: http
+  seq: 6
+  tags:
+    - Admin
+
+http:
+  method: GET
+  url: "{{baseUrl}}/admin/invitations"
+  auth:
+    type: bearer
+    token: "{{token}}"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+examples:
+  - name: 200 Response
+    description: OK
+    request:
+      url: "{{baseUrl}}/admin/invitations"
+      method: GET
+    response:
+      status: 200
+      statusText: OK
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          [
+            {
+              "id": "",
+              "email": "",
+              "createdAt": "",
+              "expiresAt": "",
+              "revoked": false,
+              "consumed": false
+            }
+          ]

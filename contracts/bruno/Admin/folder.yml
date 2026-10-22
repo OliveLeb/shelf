@@ -1,0 +1,6 @@
+info:
+  name: Admin
+  type: folder
+
+request:
+  auth: inherit

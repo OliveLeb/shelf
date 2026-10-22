@@ -1,0 +1,33 @@
+info:
+  name: Log out
+  type: http
+  seq: 9
+  tags:
+    - Account
+
+http:
+  method: POST
+  url: "{{baseUrl}}/auth/logout"
+  auth:
+    type: bearer
+    token: "{{token}}"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+examples:
+  - name: 204 Response
+    description: No Content
+    request:
+      url: "{{baseUrl}}/auth/logout"
+      method: POST
+    response:
+      status: 204
+      statusText: No Content
+      body:
+        type: text
+        data: ""

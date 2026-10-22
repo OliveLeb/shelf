@@ -1,0 +1,54 @@
+info:
+  name: Invite by email
+  type: http
+  seq: 5
+  tags:
+    - Admin
+
+http:
+  method: POST
+  url: "{{baseUrl}}/admin/invitations"
+  body:
+    type: json
+    data: |-
+      {
+        "email": ""
+      }
+  auth:
+    type: bearer
+    token: "{{token}}"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+examples:
+  - name: 201 Response
+    description: Created
+    request:
+      url: "{{baseUrl}}/admin/invitations"
+      method: POST
+      body:
+        type: json
+        data: |-
+          {
+            "email": ""
+          }
+    response:
+      status: 201
+      statusText: Created
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "id": "",
+            "email": "",
+            "expiresAt": "",
+            "link": ""
+          }
