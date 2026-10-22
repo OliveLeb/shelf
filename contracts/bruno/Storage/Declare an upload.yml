@@ -56,8 +56,14 @@ examples:
         data: |-
           {
             "id": "",
-            "url": "",
             "method": "",
             "headers": {},
+            "partSize": "",
+            "parts": [
+              {
+                "number": "",
+                "url": ""
+              }
+            ],
             "expiresAt": ""
           }

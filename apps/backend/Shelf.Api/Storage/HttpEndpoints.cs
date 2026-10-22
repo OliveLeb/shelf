@@ -8,8 +8,11 @@ public static class HttpEndpoints
     private static StorageTransaction Db(HttpContext context) => (StorageTransaction)context.Items[typeof(StorageTransaction)]!;
     private static Account Current(HttpContext context) => (Account)context.Items[typeof(Account)]!;
 
-    public static void AddStorageBackend(this WebApplicationBuilder builder) =>
+    public static void AddStorageBackend(this WebApplicationBuilder builder)
+    {
         builder.Services.AddSingleton(services => new ObjectStore(services.GetRequiredService<IConfiguration>()));
+        builder.Services.AddHostedService<UploadCleanup>();
+    }
 
     public static void MapStorageBackend(this WebApplication app)
     {
@@ -42,6 +45,7 @@ public static class HttpEndpoints
 
         api.MapGet("/spaces/personal/elements", async (string? sort, string? order, HttpContext h) => Results.Ok(await Db(h).Content(Current(h), null, sort, order))).Produces<List<Element>>().WithSummary("List the personal space root");
         api.MapPost("/uploads", async (UploadRequest input, HttpContext h) => Results.Json(await Db(h).Declare(Current(h), input), statusCode: 201)).Produces<UploadTicket>(201).WithSummary("Declare an upload");
+        api.MapGet("/uploads/{id:guid}", async (Guid id, HttpContext h) => Results.Ok(await Db(h).Resume(Current(h), id))).Produces<UploadTicket>().WithSummary("Resume an upload");
         api.MapPost("/uploads/{id:guid}/complete", async (Guid id, HttpContext h) => Results.Json(await Db(h).Complete(Current(h), id), statusCode: 201)).Produces<Element>(201).WithSummary("Complete an upload");
         api.MapGet("/files/{id:guid}/download", async (Guid id, HttpContext h) => Results.Ok(await Db(h).Download(Current(h), id))).Produces<SignedUrl>().WithSummary("Get a download link");
         api.MapGet("/folders/{id:guid}/elements", async (Guid id, string? sort, string? order, HttpContext h) => Results.Ok(await Db(h).Content(Current(h), id, sort, order))).Produces<List<Element>>().WithSummary("List a folder");

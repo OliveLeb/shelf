@@ -32,31 +32,56 @@ public sealed class StorageTransaction(NpgsqlConnection connection, NpgsqlTransa
         return await Get(id);
     }
 
+    /// <summary>Signed URLs are listed in batches: the client asks for the next missing parts after sending these.</summary>
+    private const int MaxSignedParts = 1000;
+
+    private sealed record Upload(Guid Id, Guid Space, string Name, long Size, string ContentType, string Key, string? MultipartId, long PartSize, DateTimeOffset CreatedAt, Guid? Parent, bool KeepBoth)
+    {
+        public int PartCount => MultipartId is null ? 1 : (int)((Size + PartSize - 1) / PartSize);
+        public long ExpectedSize(int number) => number < PartCount ? PartSize : Size - (PartCount - 1) * PartSize;
+    }
+
     public async Task<UploadTicket> Declare(Account account, UploadRequest input)
     {
         var name = Name(input.Name);
         if (input.Size is not >= 0) throw new StorageError(400, "invalid_size");
+        var size = input.Size.Value;
         var contentType = ContentType(input.ContentType);
         if (input.OnConflict is not (null or "keepBoth")) throw new StorageError(400, "invalid_conflict_policy");
         var space = await Destination(account, input.ParentId);
         // Checked again at confirmation, since another element may take the name meanwhile.
         if (input.OnConflict is null && await Scalar("SELECT 1 FROM elements WHERE space_id=$1 AND parent_id IS NOT DISTINCT FROM $2 AND upper(name)=upper($3)", space, input.ParentId, name) is not null)
             throw new StorageError(409, "name_conflict");
-        var id = Guid.NewGuid();
         var key = ObjectStore.NewKey();
-        await Run("INSERT INTO uploads (id, space_id, account_id, name, size, content_type, object_key, created_at, parent_id, on_conflict) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
-            id, space, account.Id, name, input.Size.Value, contentType, key, clock.GetUtcNow(), input.ParentId, input.OnConflict);
-        var signed = store.SignedUpload(key, contentType);
-        return new(id, signed.Url, "PUT", new Dictionary<string, string> { ["Content-Type"] = contentType }, signed.ExpiresAt);
+        // Files larger than one part go through an S3 multipart upload, which can resume part by part.
+        var multipart = size > store.PartSize ? await store.StartMultipart(key, contentType, cancellation) : null;
+        var upload = new Upload(Guid.NewGuid(), space, name, size, contentType, key, multipart, multipart is null ? size : store.MultipartPartSize(size), clock.GetUtcNow(), input.ParentId, input.OnConflict is not null);
+        await Run("INSERT INTO uploads (id, space_id, account_id, name, size, content_type, object_key, multipart_id, part_size, created_at, parent_id, on_conflict) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+            upload.Id, space, account.Id, name, size, contentType, key, (object?)multipart ?? DBNull.Value, upload.PartSize, upload.CreatedAt, input.ParentId, input.OnConflict);
+        return Ticket(upload, Enumerable.Range(1, upload.PartCount));
+    }
+
+    /// <summary>New signed URLs for the parts not yet received with their expected size, to resume an interrupted upload.</summary>
+    public async Task<UploadTicket> Resume(Account account, Guid uploadId)
+    {
+        var upload = await PendingUpload(account, uploadId);
+        if (upload.MultipartId is null)
+            return Ticket(upload, await store.Size(upload.Key, cancellation) == upload.Size ? [] : [1]);
+        var parts = await store.Parts(upload.Key, upload.MultipartId, cancellation);
+        return Ticket(upload, parts is null ? [] : Enumerable.Range(1, upload.PartCount).Where(n => parts.GetValueOrDefault(n)?.Size != upload.ExpectedSize(n)));
     }
 
     public async Task<Element> Complete(Account account, Guid uploadId)
     {
-        var uploads = await Query("SELECT space_id, name, size, content_type, object_key, parent_id, on_conflict FROM uploads WHERE id=$1 AND account_id=$2 FOR UPDATE",
-            r => (Space: r.GetGuid(0), Name: r.GetString(1), Size: r.GetInt64(2), ContentType: r.GetString(3), Key: r.GetString(4),
-                Parent: r.IsDBNull(5) ? (Guid?)null : r.GetGuid(5), KeepBoth: !r.IsDBNull(6)), uploadId, account.Id);
-        if (uploads.Count == 0) throw new StorageError(404, "upload_not_found");
-        var upload = uploads[0];
+        var upload = await PendingUpload(account, uploadId);
+        // Without its multipart upload, the object was already assembled by an earlier confirmation that did not commit.
+        if (upload.MultipartId is not null && await store.Parts(upload.Key, upload.MultipartId, cancellation) is { } parts)
+        {
+            var numbers = Enumerable.Range(1, upload.PartCount).ToList();
+            if (numbers.Any(n => !parts.ContainsKey(n))) throw new StorageError(409, "upload_incomplete");
+            if (numbers.Any(n => parts[n].Size != upload.ExpectedSize(n))) throw new StorageError(409, "size_mismatch");
+            await store.Assemble(upload.Key, upload.MultipartId, numbers.Select(n => parts[n]), cancellation);
+        }
         var size = await store.Size(upload.Key, cancellation);
         if (size is null) throw new StorageError(409, "upload_incomplete");
         if (size != upload.Size) throw new StorageError(409, "size_mismatch");
@@ -73,6 +98,40 @@ public sealed class StorageTransaction(NpgsqlConnection connection, NpgsqlTransa
             if (!upload.KeepBoth) throw new StorageError(409, "name_conflict");
         }
         return await Get(id);
+    }
+
+    /// <summary>Purges one upload that expired or lost its account or destination, with its parts and object; false when none is left.</summary>
+    public async Task<bool> PurgeAbandonedUpload()
+    {
+        var uploads = await Query("SELECT id, object_key, multipart_id FROM uploads WHERE created_at <= $1 OR account_id IS NULL OR space_id IS NULL LIMIT 1 FOR UPDATE SKIP LOCKED",
+            r => (Id: r.GetGuid(0), Key: r.GetString(1), MultipartId: r.IsDBNull(2) ? null : r.GetString(2)), clock.GetUtcNow() - store.UploadExpiry);
+        if (uploads.Count == 0) return false;
+        await store.Discard(uploads[0].Key, uploads[0].MultipartId, cancellation);
+        await Run("DELETE FROM uploads WHERE id=$1", uploads[0].Id);
+        return true;
+    }
+
+    private async Task<Upload> PendingUpload(Account account, Guid uploadId)
+    {
+        // An expired upload is gone for the client, even before the cleanup task purges it.
+        var uploads = await Query("SELECT id, space_id, name, size, content_type, object_key, multipart_id, part_size, created_at, parent_id, on_conflict FROM uploads WHERE id=$1 AND account_id=$2 AND created_at > $3 FOR UPDATE",
+            r => new Upload(r.GetGuid(0), r.GetGuid(1), r.GetString(2), r.GetInt64(3), r.GetString(4), r.GetString(5), r.IsDBNull(6) ? null : r.GetString(6), r.GetInt64(7), r.GetFieldValue<DateTimeOffset>(8), r.IsDBNull(9) ? null : r.GetGuid(9), !r.IsDBNull(10)),
+            uploadId, account.Id, clock.GetUtcNow() - store.UploadExpiry);
+        if (uploads.Count == 0) throw new StorageError(404, "upload_not_found");
+        if (await Destination(account, uploads[0].Parent) != uploads[0].Space) throw new StorageError(404, "folder_not_found");
+        return uploads[0];
+    }
+
+    private UploadTicket Ticket(Upload upload, IEnumerable<int> missing)
+    {
+        // No URL outlives the upload, so nothing can be sent after the cleanup task purged it.
+        var expires = store.UrlExpiry(upload.CreatedAt + store.UploadExpiry - clock.GetUtcNow());
+        var parts = missing.Take(MaxSignedParts).Select(number => new UploadPart(number, upload.MultipartId is null
+            ? store.SignedUpload(upload.Key, upload.ContentType, expires)
+            : store.SignedPart(upload.Key, upload.MultipartId, number, expires))).ToList();
+        // A single PUT signs the content type; multipart parts inherit it from the upload.
+        var headers = upload.MultipartId is null ? new Dictionary<string, string> { ["Content-Type"] = upload.ContentType } : new Dictionary<string, string>();
+        return new(upload.Id, "PUT", headers, upload.PartSize, parts, new DateTimeOffset(expires));
     }
 
     public async Task<SignedUrl> Download(Account account, Guid fileId)

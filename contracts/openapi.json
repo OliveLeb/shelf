@@ -625,6 +625,42 @@
         ]
       }
     },
+    "/uploads/{id}": {
+      "get": {
+        "tags": [
+          "Storage"
+        ],
+        "summary": "Resume an upload",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadTicket"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          }
+        ]
+      }
+    },
     "/uploads/{id}/complete": {
       "post": {
         "tags": [
@@ -1333,6 +1369,26 @@
           }
         }
       },
+      "UploadPart": {
+        "required": [
+          "number",
+          "url"
+        ],
+        "type": "object",
+        "properties": {
+          "number": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
       "UploadRequest": {
         "required": [
           "name",
@@ -1380,9 +1436,10 @@
       "UploadTicket": {
         "required": [
           "id",
-          "url",
           "method",
           "headers",
+          "partSize",
+          "parts",
           "expiresAt"
         ],
         "type": "object",
@@ -1391,9 +1448,6 @@
             "type": "string",
             "format": "uuid"
           },
-          "url": {
-            "type": "string"
-          },
           "method": {
             "type": "string"
           },
@@ -1401,6 +1455,20 @@
             "type": "object",
             "additionalProperties": {
               "type": "string"
+            }
+          },
+          "partSize": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "parts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UploadPart"
             }
           },
           "expiresAt": {

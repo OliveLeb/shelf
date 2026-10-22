@@ -1,7 +1,7 @@
 info:
   name: Rename an element
   type: http
-  seq: 7
+  seq: 8
   tags:
     - Storage
 

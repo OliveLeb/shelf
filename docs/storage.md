@@ -4,7 +4,9 @@ Spécification : [issue #3](https://github.com/OliveLeb/shelf/issues/3). Livré 
 [l’issue #4](https://github.com/OliveLeb/shelf/issues/4) (envoi et téléchargement
 d’un fichier dans son **espace personnel**) et
 [l’issue #5](https://github.com/OliveLeb/shelf/issues/5) (**dossiers**, renommage,
-déplacement et noms uniques). Le vocabulaire suit [`CONTEXT.md`](../CONTEXT.md).
+déplacement et noms uniques), et
+[l’issue #6](https://github.com/OliveLeb/shelf/issues/6) (envoi en plusieurs parties
+reprenable et expiration des envois non confirmés). Le vocabulaire suit [`CONTEXT.md`](../CONTEXT.md).
 
 Le contenu des fichiers vit dans un bucket compatible S3 privé et transite
 directement entre le client et le S3 par URL signées de courte durée
@@ -27,6 +29,9 @@ de secrets, jamais dans un fichier versionné :
 | `Storage__S3__AccessKey`, `Storage__S3__SecretKey` | Identifiants limités à ce bucket |
 | `Storage__S3__ForcePathStyle` | `true` pour l’adressage par chemin (MinIO) ; défaut `false` (sous-domaine) |
 | `Storage__SignedUrlMinutes` | Validité des URL signées ; défaut 15 |
+| `Storage__PartSizeMiB` | Taille des parties d’un envoi en plusieurs parties, et seuil au-delà duquel il s’applique ; défaut 16, minimum 5 (minimum S3) |
+| `Storage__UploadExpiryHours` | Délai après la déclaration au-delà duquel un envoi non confirmé expire ; défaut 24 |
+| `Storage__UploadCleanupSeconds` | Intervalle de la tâche de fond qui purge les envois expirés ; défaut 300 |
 
 Le démarrage HTTP échoue si la configuration S3 est incomplète ; les commandes
 `migrate` et `admin` n’en ont pas besoin. La migration `002_storage` crée
@@ -53,7 +58,8 @@ JSON avec `Cache-Control: no-store` et signalent les erreurs par
 | `POST /folders` | `name`, `parentId` (dossier parent ; absent ou `null` : racine) | 201, dossier créé |
 | `POST /elements/{id}/rename` | `name` | 200, élément renommé |
 | `POST /elements/{id}/move` | `parentId` (dossier de destination ; `null` : racine) | 200, élément déplacé |
-| `POST /uploads` | `name`, `size`, `contentType` (défaut `application/octet-stream`), `parentId`, `onConflict` | 201, `{id, url, method, headers, expiresAt}` |
+| `POST /uploads` | `name`, `size`, `contentType` (défaut `application/octet-stream`), `parentId`, `onConflict` | 201, `{id, method, headers, partSize, parts, expiresAt}` |
+| `GET /uploads/{id}` | — | 200, même forme, avec les seules parties manquantes |
 | `POST /uploads/{id}/complete` | — | 201, fichier créé |
 | `GET /files/{id}/download` | — | 200, `{url, expiresAt}` |
 
@@ -80,12 +86,33 @@ dossiers précèdent toujours les fichiers.
 ### Envoi
 
 1. Déclarer l’envoi avec `POST /uploads`. L’API réserve une clé d’objet et
-   renvoie une URL signée.
-2. Envoyer les octets avec la méthode `method` (`PUT`) sur `url`, avec exactement
-   les en-têtes `headers` : le type de contenu fait partie de la signature.
-3. Confirmer avec `POST /uploads/{id}/complete`. L’API vérifie auprès du S3 que
-   l’objet existe et que sa taille égale la taille déclarée. Le fichier
-   n’apparaît qu’après cette confirmation.
+   renvoie la liste `parts` des parties à envoyer, chacune avec son numéro
+   `number` et une URL signée `url`, valables jusqu’à `expiresAt`.
+2. Envoyer chaque partie avec la méthode `method` (`PUT`) sur son `url`, avec
+   exactement les en-têtes `headers`. La partie `n` contient les octets
+   `[(n-1)·partSize, n·partSize)` du fichier ; la dernière est plus courte. Les
+   parties peuvent partir en parallèle et dans n’importe quel ordre.
+3. Confirmer avec `POST /uploads/{id}/complete`. Le fichier n’apparaît qu’après
+   cette confirmation.
+
+Un fichier d’au plus `Storage__PartSizeMiB` est envoyé en une seule partie : un
+`PUT` simple dont l’en-tête `Content-Type` fait partie de la signature. Au-delà,
+l’API ouvre un envoi S3 en plusieurs parties ; `headers` est alors vide. La taille
+des parties grandit, par MiB entiers, pour rester sous la limite S3 de 10 000
+parties. Il n’y a ni limite applicative de taille ni quota : seules les limites
+du fournisseur s’appliquent (5 Tio par objet chez AWS).
+
+**Reprise.** Après une coupure, ou quand les URL ont expiré, `GET /uploads/{id}`
+renvoie de nouvelles URL pour les seules parties absentes du S3 ou reçues avec
+une taille différente de celle attendue. Une liste vide signifie que tout est
+reçu. Chaque réponse liste au plus 1 000 parties : les envoyer, puis redemander
+les suivantes.
+
+**Confirmation.** L’API liste auprès du S3 les parties reçues : une partie
+manquante répond `upload_incomplete`, une partie de taille inattendue
+`size_mismatch`. Elle assemble ensuite l’objet, puis vérifie que l’objet existe et
+que sa taille égale la taille déclarée. Le client n’a pas à fournir les ETag des
+parties ; le CORS du bucket n’a donc pas besoin de les exposer.
 
 `parentId` désigne le dossier de destination (absent ou `null` : racine de
 l’espace personnel). Le nom est vérifié dans la destination à la déclaration,
@@ -115,11 +142,11 @@ selon RFC 5987). Les requêtes partielles (`Range`) sont prises en charge par le
 | 400 | `invalid_conflict_policy` | `onConflict` autre que `keepBoth` |
 | 400 | `invalid_sort`, `invalid_order` | `sort` ou `order` inconnu |
 | 401 | `authentication_required` | Session absente, expirée ou compte désactivé |
-| 404 | `upload_not_found` | Envoi inconnu, déjà confirmé ou déclaré par un autre utilisateur |
+| 404 | `upload_not_found` | Envoi inconnu, expiré, sans destination, déjà confirmé ou déclaré par un autre utilisateur |
 | 404 | `element_not_found` | Élément inexistant ou invisible pour l’utilisateur (ou dossier passé au téléchargement) |
 | 404 | `folder_not_found` | Dossier parent, de destination ou listé inexistant, invisible, ou qui est un fichier |
-| 409 | `upload_incomplete` | Objet absent du bucket à la confirmation ; envoyer puis confirmer de nouveau |
-| 409 | `size_mismatch` | Taille de l’objet différente de la déclaration ; renvoyer le contenu puis confirmer de nouveau |
+| 409 | `upload_incomplete` | Objet ou partie absent du bucket à la confirmation ; reprendre l’envoi puis confirmer de nouveau |
+| 409 | `size_mismatch` | Taille de l’objet ou d’une partie différente de l’attendu ; reprendre l’envoi puis confirmer de nouveau |
 | 409 | `name_conflict` | Un élément du même nom, sans tenir compte de la casse, existe déjà dans le dossier |
 | 409 | `folder_cycle` | Déplacement d’un dossier dans lui-même ou un de ses descendants |
 | 503 | `database_unavailable`, `storage_unavailable` | PostgreSQL ou S3 indisponible |
@@ -129,8 +156,7 @@ administrateur : le rôle administrateur ne donne aucun accès au contenu.
 
 ## Limites actuelles
 
-L’espace commun, les partages, la corbeille, l’envoi en plusieurs
-parties, l’expiration des envois abandonnés, la politique « remplacer », les miniatures et la purge des
+L’espace commun, les partages, la corbeille, la politique « remplacer », les miniatures et la purge des
 objets à la suppression d’un compte sont livrés par les autres sous-issues de #3.
 En attendant #15, la suppression d’un compte efface ses métadonnées de stockage
 mais laisse ses objets dans le bucket.
