@@ -1,7 +1,7 @@
 info:
   name: Remove a share
   type: http
-  seq: 4
+  seq: 7
   tags:
     - Storage
 

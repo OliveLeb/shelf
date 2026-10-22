@@ -1,0 +1,58 @@
+info:
+  name: Get storage usage per account
+  type: http
+  seq: 3
+  tags:
+    - Storage
+
+http:
+  method: GET
+  url: "{{baseUrl}}/admin/storage/usage"
+  auth:
+    type: bearer
+    token: "{{token}}"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+examples:
+  - name: 200 Response
+    description: OK
+    request:
+      url: "{{baseUrl}}/admin/storage/usage"
+      method: GET
+    response:
+      status: 200
+      statusText: OK
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          [
+            {
+              "account": {
+                "id": "",
+                "username": ""
+              },
+              "bytes": ""
+            }
+          ]
+  - name: 403 Response
+    description: Forbidden
+    request:
+      url: "{{baseUrl}}/admin/storage/usage"
+      method: GET
+    response:
+      status: 403
+      statusText: Forbidden
+      body:
+        type: text
+        data: ""
+
+docs: Administrator only. Returns account identity and personal-space file bytes including trash, without content metadata. Includes empty and disabled accounts; excludes common-space bytes.

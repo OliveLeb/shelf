@@ -45,4 +45,61 @@ public sealed class SearchUsageTests : TestInstance
         Assert.Equal(HttpStatusCode.BadRequest, (await recipient.GetAsync("/elements/search")).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await Client.GetAsync("/elements/search?query=photo")).StatusCode);
     }
+
+    [Fact]
+    public async Task Usage_counts_confirmed_bytes_by_space_owner_including_trash_but_not_received_shares_or_pending_uploads()
+    {
+        var (aliceId, alice) = await User("alice");
+        var (bobId, bob) = await User("bob");
+        var (_, empty) = await User("empty");
+        var initial = await Json(await alice.GetAsync("/storage/usage"));
+        Assert.Equal(0, initial.GetProperty("personalBytes").GetInt64());
+        Assert.Equal(0, initial.GetProperty("commonBytes").GetInt64());
+        await Upload(alice, "private.txt", content: new byte[3]);
+        var folder = Id(await Json(await alice.PostAsJsonAsync("/folders", new { name = "private folder" })));
+        await Upload(alice, "nested.txt", folder, new byte[7]);
+        var shared = Id(await Json(await bob.PostAsJsonAsync("/folders", new { name = "shared folder" })));
+        await Upload(bob, "bob.txt", shared, new byte[11]);
+        await Json(await bob.PutAsJsonAsync($"/elements/{shared}/shares/{aliceId}", new { level = "write" }));
+        await Upload(alice, "added by alice.txt", shared, new byte[2]);
+        var commonTicket = await Json(await alice.PostAsJsonAsync("/uploads", new { name = "common.txt", size = 13, space = "common" }));
+        await Put(commonTicket, new byte[13]);
+        var common = Id(await Json(await Confirm(alice, commonTicket)));
+        var pending = await Declare(alice, "pending.txt", 17);
+        await Put(pending, new byte[17]);
+        Assert.Equal(HttpStatusCode.NoContent, (await alice.DeleteAsync($"/elements/{folder}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await bob.DeleteAsync($"/elements/{common}")).StatusCode);
+
+        var usage = await Json(await alice.GetAsync("/storage/usage"));
+        Assert.Equal(new[] { "commonBytes", "personalBytes" }, usage.EnumerateObject().Select(p => p.Name).Order());
+        Assert.Equal(10, usage.GetProperty("personalBytes").GetInt64());
+        Assert.Equal(13, usage.GetProperty("commonBytes").GetInt64());
+        Assert.Equal(13, (await Json(await bob.GetAsync("/storage/usage"))).GetProperty("personalBytes").GetInt64());
+        Assert.Equal(0, (await Json(await empty.GetAsync("/storage/usage"))).GetProperty("personalBytes").GetInt64());
+        // Account administration sees only identity and a total, never file/folder names or metadata.
+        var totals = (await Json(await Admin.GetAsync("/admin/storage/usage"))).EnumerateArray().ToArray();
+        Assert.Equal(4, totals.Length);
+        foreach (var total in totals)
+        {
+            Assert.Equal(new[] { "account", "bytes" }, total.EnumerateObject().Select(p => p.Name).Order());
+            Assert.Equal(new[] { "id", "username" }, total.GetProperty("account").EnumerateObject().Select(p => p.Name).Order());
+        }
+        Assert.Equal(10, totals.Single(t => Id(t.GetProperty("account")) == aliceId).GetProperty("bytes").GetInt64());
+        Assert.Equal(13, totals.Single(t => Id(t.GetProperty("account")) == bobId).GetProperty("bytes").GetInt64());
+        Assert.Equal(2, totals.Count(t => t.GetProperty("bytes").GetInt64() == 0));
+        Assert.Equal(HttpStatusCode.Forbidden, (await alice.GetAsync("/admin/storage/usage")).StatusCode);
+        foreach (var route in new[] { "/storage/usage", "/admin/storage/usage" })
+            Assert.Equal(HttpStatusCode.Unauthorized, (await Client.GetAsync(route)).StatusCode);
+
+        await Json(await alice.PostAsync($"/trash/{folder}/restore", null));
+        Assert.Equal(10, (await Json(await alice.GetAsync("/storage/usage"))).GetProperty("personalBytes").GetInt64());
+        Assert.Equal(HttpStatusCode.NoContent, (await alice.DeleteAsync($"/elements/{folder}")).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await alice.DeleteAsync($"/trash/{folder}")).StatusCode);
+        Assert.Equal(3, (await Json(await alice.GetAsync("/storage/usage"))).GetProperty("personalBytes").GetInt64());
+        // Replacement retains the old bytes in trash, and consulting usage imposes no quota on subsequent writes.
+        await Upload(alice, "private.txt", content: new byte[5], onConflict: "replace");
+        Assert.Equal(8, (await Json(await alice.GetAsync("/storage/usage"))).GetProperty("personalBytes").GetInt64());
+        Assert.Equal(HttpStatusCode.NoContent, (await alice.DeleteAsync("/spaces/common/trash")).StatusCode);
+        Assert.Equal(0, (await Json(await bob.GetAsync("/storage/usage"))).GetProperty("commonBytes").GetInt64());
+    }
 }
