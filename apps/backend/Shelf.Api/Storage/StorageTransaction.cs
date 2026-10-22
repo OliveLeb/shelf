@@ -62,12 +62,16 @@ public sealed class StorageTransaction(NpgsqlConnection connection, NpgsqlTransa
         if (size != upload.Size) throw new StorageError(409, "size_mismatch");
         var id = Guid.NewGuid();
         await Run("DELETE FROM uploads WHERE id=$1", uploadId);
-        // The unique index decides between concurrent uploads: a taken name inserts nothing, then "keep both" tries the next number.
-        for (var number = 0; await Scalar("""
-            INSERT INTO elements (id, space_id, parent_id, kind, name, size, content_type, object_key, added_at, added_by)
-            VALUES ($1,$2,$3,'file',$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING RETURNING id
-            """, id, upload.Space, upload.Parent, Numbered(upload.Name, number), upload.Size, upload.ContentType, upload.Key, clock.GetUtcNow(), account.Id) is null; number++)
+        // The unique name index decides between concurrent uploads: a taken name inserts nothing, then "keep both" tries the next number.
+        for (var number = 0; ; number++)
+        {
+            if (await Scalar("""
+                INSERT INTO elements (id, space_id, parent_id, kind, name, size, content_type, object_key, added_at, added_by)
+                VALUES ($1,$2,$3,'file',$4,$5,$6,$7,$8,$9) ON CONFLICT (space_id, parent_id, upper(name)) DO NOTHING RETURNING id
+                """, id, upload.Space, upload.Parent, Numbered(upload.Name, number), upload.Size, upload.ContentType, upload.Key, clock.GetUtcNow(), account.Id) is not null)
+                break;
             if (!upload.KeepBoth) throw new StorageError(409, "name_conflict");
+        }
         return await Get(id);
     }
 
@@ -94,7 +98,8 @@ public sealed class StorageTransaction(NpgsqlConnection connection, NpgsqlTransa
         if (await Scalar("SELECT e.space_id FROM elements e JOIN spaces s ON s.id=e.space_id WHERE e.id=$1 AND s.owner_id=$2", elementId, account.Id) is not Guid space)
             throw new StorageError(404, "element_not_found");
         // Moves of a space run one at a time, so two concurrent moves cannot each pass the cycle check and form a cycle together.
-        await Run("SELECT 1 FROM spaces WHERE id=$1 FOR UPDATE", space);
+        // NO KEY UPDATE leaves the foreign key checks of uploads and folder creations in the space unblocked.
+        await Run("SELECT 1 FROM spaces WHERE id=$1 FOR NO KEY UPDATE", space);
         if (await Destination(account, input.ParentId) != space) throw new StorageError(404, "folder_not_found");
         if (input.ParentId is not null && await Scalar("""
             WITH RECURSIVE ancestors(id, parent_id) AS (

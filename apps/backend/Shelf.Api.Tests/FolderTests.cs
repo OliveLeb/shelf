@@ -62,6 +62,8 @@ public sealed class FolderTests : TestInstance
         Assert.Equal("name_conflict", await Error(await member.PostAsJsonAsync("/folders", new { name = "Notes.TXT" })));
         Assert.Equal("name_conflict", await Error(await member.PostAsJsonAsync("/uploads", new { name = "albums", size = 1 })));
         Assert.Equal("name_conflict", await Error(await member.PostAsJsonAsync($"/elements/{notes}/rename", new { name = "albums" })));
+        Assert.Equal("invalid_name", await Error(await member.PostAsJsonAsync("/folders", new { name = "a/b" })));
+        Assert.Equal("invalid_name", await Error(await member.PostAsJsonAsync($"/elements/{albums}/rename", new { name = ".." })));
         Assert.Equal(HttpStatusCode.OK, (await member.PostAsJsonAsync($"/elements/{other}/rename", new { name = "NOTES.txt" })).StatusCode);
         var move = await member.PostAsJsonAsync($"/elements/{other}/move", new { parentId = (Guid?)null });
         Assert.Equal(HttpStatusCode.Conflict, move.StatusCode);
@@ -245,8 +247,6 @@ public sealed class FolderTests : TestInstance
         }
         Assert.Equal("element_not_found", await Error(await member.GetAsync($"/files/{folder}/download")));
         Assert.Equal("folder_not_found", await Error(await member.GetAsync($"/folders/{file}/elements")));
-        Assert.Equal("invalid_name", await Error(await member.PostAsJsonAsync("/folders", new { name = "a/b" })));
-        Assert.Equal("invalid_name", await Error(await member.PostAsJsonAsync($"/elements/{folder}/rename", new { name = ".." })));
         Assert.Equal(["Private"], Names(await Root(member)));
         Assert.Equal(["private.jpg"], Names(await Content(member, folder)));
     }

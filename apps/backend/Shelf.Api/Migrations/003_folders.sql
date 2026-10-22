@@ -16,5 +16,6 @@ ALTER TABLE elements ALTER COLUMN kind DROP DEFAULT;
 DROP INDEX elements_name_unique;
 CREATE UNIQUE INDEX elements_name_unique ON elements (space_id, parent_id, upper(name)) NULLS NOT DISTINCT;
 ALTER TABLE uploads
-    ADD COLUMN parent_id uuid REFERENCES elements (id) ON DELETE CASCADE,
-    ADD COLUMN on_conflict text CHECK (on_conflict IN ('keepBoth'));
+    ADD COLUMN parent_id uuid,
+    ADD COLUMN on_conflict text CHECK (on_conflict IN ('keepBoth')),
+    ADD CONSTRAINT uploads_parent FOREIGN KEY (parent_id, space_id) REFERENCES elements (id, space_id) ON DELETE CASCADE;
