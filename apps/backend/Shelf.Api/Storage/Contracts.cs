@@ -16,3 +16,9 @@ public sealed class StorageError(int status, string code) : Exception(code)
     public int Status { get; } = status;
     public string Code { get; } = code;
 }
+
+/// <summary>Sets a share's level. Only "read" is supported until write sharing is available.</summary>
+public sealed record ShareRequest(string? Level);
+/// <summary>A direct or inherited grant; ElementId identifies the root on which it was granted.</summary>
+public sealed record Share(Guid ElementId, AccountSummary Recipient, string Level);
+public sealed record SharedElement(Element Element, AccountSummary Owner, string Level);

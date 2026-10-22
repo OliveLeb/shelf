@@ -40,6 +40,10 @@ public static class HttpEndpoints
             catch (Amazon.Runtime.AmazonServiceException) { return Results.Json(new { error = "storage_unavailable" }, statusCode: 503); }
         });
 
+        api.MapGet("/shares/received", (Delegate)(async (HttpContext h) => Results.Ok(await Db(h).ReceivedShares(Current(h))))).Produces<List<SharedElement>>().WithSummary("List elements shared with me");
+        api.MapGet("/elements/{id:guid}/shares", async (Guid id, HttpContext h) => Results.Ok(await Db(h).Shares(Current(h), id))).Produces<List<Share>>().WithSummary("List an element's shares");
+        api.MapPut("/elements/{id:guid}/shares/{recipientId:guid}", async (Guid id, Guid recipientId, ShareRequest input, HttpContext h) => Results.Ok(await Db(h).SetShare(Current(h), id, recipientId, input))).Produces<Share>().WithSummary("Set a share's level");
+        api.MapDelete("/elements/{id:guid}/shares/{recipientId:guid}", async (Guid id, Guid recipientId, HttpContext h) => { await Db(h).RemoveShare(Current(h), id, recipientId); return Results.NoContent(); }).Produces(204).WithSummary("Remove a share");
         api.MapGet("/spaces/personal/elements", async (string? sort, string? order, HttpContext h) => Results.Ok(await Db(h).Content(Current(h), null, sort, order))).Produces<List<Element>>().WithSummary("List the personal space root");
         api.MapGet("/spaces/common/elements", async (string? sort, string? order, HttpContext h) => Results.Ok(await Db(h).Content(Current(h), null, sort, order, "common"))).Produces<List<Element>>().WithSummary("List the common space root");
         api.MapPost("/uploads", async (UploadRequest input, HttpContext h) => Results.Json(await Db(h).Declare(Current(h), input), statusCode: 201)).Produces<UploadTicket>(201).WithSummary("Declare an upload");

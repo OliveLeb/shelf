@@ -5,7 +5,8 @@ Spécification : [issue #3](https://github.com/OliveLeb/shelf/issues/3). Livré 
 d’un fichier dans son **espace personnel**),
 [l’issue #5](https://github.com/OliveLeb/shelf/issues/5) (**dossiers**, renommage,
 déplacement et noms uniques) et [l’issue #8](https://github.com/OliveLeb/shelf/issues/8)
-(**espace commun**). Le vocabulaire suit [`CONTEXT.md`](../CONTEXT.md).
+(**espace commun**) et [l’issue #9](https://github.com/OliveLeb/shelf/issues/9)
+(**partages en Lecture** et **Partagés avec moi**). Le vocabulaire suit [`CONTEXT.md`](../CONTEXT.md).
 
 Le contenu des fichiers vit dans un bucket compatible S3 privé et transite
 directement entre le client et le S3 par URL signées de courte durée
@@ -58,6 +59,10 @@ JSON avec `Cache-Control: no-store` et signalent les erreurs par
 | `POST /uploads` | `name`, `size`, `contentType` (défaut `application/octet-stream`), `parentId`, `onConflict`, `space` | 201, `{id, url, method, headers, expiresAt}` |
 | `POST /uploads/{id}/complete` | — | 201, fichier créé |
 | `GET /files/{id}/download` | — | 200, `{url, expiresAt}` |
+| `PUT /elements/{id}/shares/{recipientId}` | `level` (`read`) | 200, partage créé ou mis à jour |
+| `GET /elements/{id}/shares` | — | 200, partages directs et hérités de l’élément, réservés au propriétaire |
+| `DELETE /elements/{id}/shares/{recipientId}` | — | 204, partage direct retiré |
+| `GET /shares/received` | — | 200, racines des partages reçus avec leur propriétaire et leur niveau |
 
 Un élément contient `id`, `kind` (`file` ou `folder`), `name`, `parentId`
 (`null` à la racine), `size` et `contentType` (`null` pour un dossier), `addedAt`
@@ -93,6 +98,44 @@ Un élément commun ne peut jamais être déplacé vers un espace personnel
 va à la racine de l’espace actuel de l’élément, donc à la racine commune pour un
 élément commun. Les noms uniques, le tri et la politique `keepBoth` s’appliquent
 de la même façon dans les deux espaces.
+
+### Partages en Lecture
+
+Seul le **propriétaire** d’un élément personnel peut créer, modifier, consulter
+ou retirer ses partages. `PUT /elements/{id}/shares/{recipientId}` accorde la
+Lecture à un autre compte actif. Le couple élément/destinataire est unique :
+répéter le `PUT` met à jour le niveau du partage sans le dupliquer. Le niveau
+est stocké et modifiable par cette même route ; seul `"read"` est accepté à ce
+stade. L’Écriture sera livrée par l’issue #12 et reste refusée ici.
+
+Un partage contient `elementId` (racine du partage), `recipient` (`{id, username}`)
+et `level`. La consultation par le propriétaire inclut les partages directs et
+ceux hérités des dossiers parents. Pour modifier ou retirer un partage hérité,
+utiliser son `elementId`. Retirer un partage direct absent répond aussi `204`.
+Les éléments communs n’ont aucun propriétaire et ne peuvent pas être partagés.
+
+Un partage de dossier couvre tous ses descendants actuels et futurs. Les droits
+sont recalculés depuis les ancêtres à chaque accès : déplacer un fichier dans
+un dossier partagé lui donne la Lecture ; l’en sortir lui retire cet héritage.
+Les partages qui se chevauchent ne se réduisent pas entre eux : retirer celui
+d’un dossier laisse actif un éventuel partage direct sur un de ses fichiers.
+Le transfert vers l’espace commun retire les partages du sous-arbre transféré.
+
+`GET /shares/received` renvoie une liste de `{element, owner, level}`. `owner`
+contient l’identifiant et le nom du propriétaire, indépendamment de l’auteur de
+l’ajout. Seules les racines explicitement partagées apparaissent dans cette vue ;
+les descendants se parcourent avec `GET /folders/{id}/elements`. Un fichier
+isolé peut être téléchargé sans rendre ses dossiers parents visibles. Ces
+éléments restent dans l’espace du propriétaire et n’apparaissent jamais dans
+l’espace personnel du destinataire.
+
+Le destinataire peut parcourir et télécharger ; renommer, déplacer, créer un
+dossier ou déclarer un envoi dans un dossier en Lecture répond `403`.
+Consulter, créer, modifier ou retirer des partages est aussi interdit au
+destinataire (`403`). Un tiers sans partage, administrateur compris, reçoit
+`404` pour un élément invisible. Retirer le dernier partage couvrant un élément
+le rend de nouveau invisible. Une URL S3 déjà délivrée reste toutefois valide
+jusqu’à son expiration ; le retrait interdit immédiatement d’en obtenir une nouvelle.
 
 ### Dossiers
 
@@ -152,9 +195,13 @@ selon RFC 5987). Les requêtes partielles (`Range`) sont prises en charge par le
 | 400 | `invalid_size` | Taille absente ou négative |
 | 400 | `invalid_content_type` | Type de contenu invalide |
 | 400 | `invalid_conflict_policy` | `onConflict` autre que `keepBoth` |
+| 400 | `invalid_share_level` | Niveau autre que `read` (y compris absent) |
+| 400 | `invalid_recipient` | Destinataire inexistant, désactivé ou identique au propriétaire |
 | 400 | `invalid_space` | `space` autre que `personal` ou `common` |
 | 400 | `invalid_sort`, `invalid_order` | `sort` ou `order` inconnu |
 | 401 | `authentication_required` | Session absente, expirée ou compte désactivé |
+| 403 | `write_forbidden` | Écriture sur un élément ou dans un dossier partagé en Lecture |
+| 403 | `sharing_forbidden` | Gestion des partages par un destinataire ou sur un élément commun |
 | 403 | `common_to_personal_forbidden` | Déplacement d’un élément commun vers un espace personnel |
 | 404 | `upload_not_found` | Envoi inconnu, déjà confirmé ou déclaré par un autre utilisateur |
 | 404 | `element_not_found` | Élément inexistant ou invisible pour l’utilisateur (ou dossier passé au téléchargement) |
@@ -165,12 +212,13 @@ selon RFC 5987). Les requêtes partielles (`Range`) sont prises en charge par le
 | 409 | `folder_cycle` | Déplacement d’un dossier dans lui-même ou un de ses descendants |
 | 503 | `database_unavailable`, `storage_unavailable` | PostgreSQL ou S3 indisponible |
 
-Un élément d’un autre espace personnel répond `404`, y compris à un
-administrateur : le rôle administrateur ne donne aucun accès au contenu.
+Un élément d’un autre espace personnel sans partage couvrant cet élément répond
+`404`, y compris à un administrateur : le rôle administrateur ne donne aucun
+accès au contenu.
 
 ## Limites actuelles
 
-Les partages, la corbeille, l’envoi en plusieurs
+Les partages en Écriture, la corbeille, l’envoi en plusieurs
 parties, l’expiration des envois abandonnés, la politique « remplacer », les miniatures et la purge des
 objets à la suppression d’un compte sont livrés par les autres sous-issues de #3.
 En attendant #15, la suppression d’un compte efface ses métadonnées de stockage
