@@ -14,7 +14,9 @@ http:
       {
         "name": "",
         "size": "",
-        "contentType": ""
+        "contentType": "",
+        "parentId": "",
+        "onConflict": ""
       }
   auth:
     type: bearer
@@ -39,7 +41,9 @@ examples:
           {
             "name": "",
             "size": "",
-            "contentType": ""
+            "contentType": "",
+            "parentId": "",
+            "onConflict": ""
           }
     response:
       status: 201

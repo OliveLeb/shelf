@@ -1,16 +1,17 @@
 # Stockage des fichiers
 
 Spécification : [issue #3](https://github.com/OliveLeb/shelf/issues/3). Livré par
-[l’issue #4](https://github.com/OliveLeb/shelf/issues/4) : envoi et téléchargement
-d’un fichier à la racine de son **espace personnel**. Le vocabulaire suit
-[`CONTEXT.md`](../CONTEXT.md).
+[l’issue #4](https://github.com/OliveLeb/shelf/issues/4) (envoi et téléchargement
+d’un fichier dans son **espace personnel**) et
+[l’issue #5](https://github.com/OliveLeb/shelf/issues/5) (**dossiers**, renommage,
+déplacement et noms uniques). Le vocabulaire suit [`CONTEXT.md`](../CONTEXT.md).
 
 Le contenu des fichiers vit dans un bucket compatible S3 privé et transite
 directement entre le client et le S3 par URL signées de courte durée
 ([ADR 0001](adr/0001-direct-s3-transfers-with-signed-urls.md)). PostgreSQL
 conserve les espaces, les éléments et les envois en cours. La clé d’objet d’un
 fichier est un identifiant opaque (`files/<uuid>`), indépendant de son nom et de
-son espace.
+son espace : renommer ou déplacer un **élément** ne touche pas au S3.
 
 ## Configuration
 
@@ -44,13 +45,34 @@ JSON avec `Cache-Control: no-store` et signalent les erreurs par
 
 | Méthode et route | Corps | Succès |
 | --- | --- | --- |
-| `GET /spaces/personal/elements` | — | 200, fichiers de la racine de son espace personnel, triés par nom |
-| `POST /uploads` | `name`, `size`, `contentType` (défaut `application/octet-stream`) | 201, `{id, url, method, headers, expiresAt}` |
+| `GET /spaces/personal/elements?sort=&order=` | — | 200, éléments de la racine de son espace personnel |
+| `GET /folders/{id}/elements?sort=&order=` | — | 200, éléments du dossier |
+| `POST /folders` | `name`, `parentId` (dossier parent ; absent ou `null` : racine) | 201, dossier créé |
+| `POST /elements/{id}/rename` | `name` | 200, élément renommé |
+| `POST /elements/{id}/move` | `parentId` (dossier de destination ; `null` : racine) | 200, élément déplacé |
+| `POST /uploads` | `name`, `size`, `contentType` (défaut `application/octet-stream`), `parentId`, `onConflict` | 201, `{id, url, method, headers, expiresAt}` |
 | `POST /uploads/{id}/complete` | — | 201, fichier créé |
 | `GET /files/{id}/download` | — | 200, `{url, expiresAt}` |
 
-Un fichier contient `id`, `name`, `size`, `contentType`, `addedAt` et
-`addedBy` (`{id, username}`, ou `null` si le compte n’existe plus).
+Un élément contient `id`, `kind` (`file` ou `folder`), `name`, `parentId`
+(`null` à la racine), `size` et `contentType` (`null` pour un dossier), `addedAt`
+et `addedBy` (`{id, username}`, ou `null` si le compte n’existe plus).
+
+### Dossiers
+
+Les dossiers s’imbriquent sans limite de profondeur. Deux éléments d’un même
+dossier, racine comprise, ne portent jamais le même nom, sans tenir compte de la
+casse : un index unique PostgreSQL le garantit, y compris sous concurrence. Créer,
+renommer ou déplacer vers un nom pris répond `409 name_conflict`.
+
+Le déplacement reste dans l’espace de l’élément. Déplacer un dossier dans
+lui-même ou dans un de ses descendants répond `409 folder_cycle` ; les
+déplacements d’un même espace s’exécutent l’un après l’autre, si bien que deux
+déplacements concurrents ne peuvent pas former un cycle.
+
+Le contenu d’un dossier se trie avec `sort` : `name` (défaut, sans tenir compte
+de la casse), `addedAt` ou `size`, et `order` : `asc` (défaut) ou `desc`. Les
+dossiers précèdent toujours les fichiers.
 
 ### Envoi
 
@@ -62,9 +84,14 @@ Un fichier contient `id`, `name`, `size`, `contentType`, `addedAt` et
    l’objet existe et que sa taille égale la taille déclarée. Le fichier
    n’apparaît qu’après cette confirmation.
 
-Le nom doit être libre dans la destination, sans tenir compte de la casse : il
-est vérifié à la déclaration, puis de nouveau à la confirmation par une
-contrainte PostgreSQL, car un autre fichier a pu le prendre entre-temps.
+`parentId` désigne le dossier de destination (absent ou `null` : racine de
+l’espace personnel). Le nom est vérifié dans la destination à la déclaration,
+puis de nouveau à la confirmation par une contrainte PostgreSQL, car un autre
+élément a pu le prendre entre-temps. Sans `onConflict`, un nom pris répond
+`409 name_conflict`. Avec `"onConflict": "keepBoth"` (« garder les deux »), le
+fichier est renommé automatiquement à la confirmation : `photo.jpg` devient
+`photo (1).jpg`, puis `photo (2).jpg`… Le nom définitif figure dans la réponse
+de la confirmation.
 
 Le bucket doit autoriser le CORS de l’origine cliente pour les transferts depuis
 un navigateur.
@@ -82,21 +109,25 @@ selon RFC 5987). Les requêtes partielles (`Range`) sont prises en charge par le
 | 400 | `invalid_name` | Nom vide, de plus de 255 caractères, `.`/`..`, avec `/`, `\` ou caractère de contrôle |
 | 400 | `invalid_size` | Taille absente ou négative |
 | 400 | `invalid_content_type` | Type de contenu invalide |
+| 400 | `invalid_conflict_policy` | `onConflict` autre que `keepBoth` |
+| 400 | `invalid_sort`, `invalid_order` | `sort` ou `order` inconnu |
 | 401 | `authentication_required` | Session absente, expirée ou compte désactivé |
 | 404 | `upload_not_found` | Envoi inconnu, déjà confirmé ou déclaré par un autre utilisateur |
-| 404 | `element_not_found` | Fichier inexistant ou invisible pour l’utilisateur |
+| 404 | `element_not_found` | Élément inexistant ou invisible pour l’utilisateur (ou dossier passé au téléchargement) |
+| 404 | `folder_not_found` | Dossier parent, de destination ou listé inexistant, invisible, ou qui est un fichier |
 | 409 | `upload_incomplete` | Objet absent du bucket à la confirmation ; envoyer puis confirmer de nouveau |
 | 409 | `size_mismatch` | Taille de l’objet différente de la déclaration ; renvoyer le contenu puis confirmer de nouveau |
-| 409 | `name_conflict` | Un élément du même nom, sans tenir compte de la casse, existe déjà |
+| 409 | `name_conflict` | Un élément du même nom, sans tenir compte de la casse, existe déjà dans le dossier |
+| 409 | `folder_cycle` | Déplacement d’un dossier dans lui-même ou un de ses descendants |
 | 503 | `database_unavailable`, `storage_unavailable` | PostgreSQL ou S3 indisponible |
 
-Un fichier d’un autre espace personnel répond `404`, y compris à un
+Un élément d’un autre espace personnel répond `404`, y compris à un
 administrateur : le rôle administrateur ne donne aucun accès au contenu.
 
 ## Limites actuelles
 
-Les dossiers, l’espace commun, les partages, la corbeille, l’envoi en plusieurs
-parties, l’expiration des envois abandonnés, les miniatures et la purge des
+L’espace commun, les partages, la corbeille, l’envoi en plusieurs
+parties, l’expiration des envois abandonnés, la politique « remplacer », les miniatures et la purge des
 objets à la suppression d’un compte sont livrés par les autres sous-issues de #3.
 En attendant #15, la suppression d’un compte efface ses métadonnées de stockage
 mais laisse ses objets dans le bucket.

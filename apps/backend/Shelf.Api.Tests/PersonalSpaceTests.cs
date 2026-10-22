@@ -7,23 +7,6 @@ namespace Shelf.Api.Tests;
 
 public sealed class PersonalSpaceTests : TestInstance
 {
-    private static readonly byte[] Photo = "not really a jpeg, but bytes all the same"u8.ToArray();
-
-    private static async Task<JsonElement> Declare(HttpClient client, string name, long size, string contentType = "image/jpeg")
-    {
-        var response = await client.PostAsJsonAsync("/uploads", new { name, size, contentType });
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        return await Json(response);
-    }
-    private static async Task<HttpResponseMessage> Put(JsonElement upload, byte[] content)
-    {
-        var request = new HttpRequestMessage(HttpMethod.Put, upload.GetProperty("url").GetString()) { Content = new ByteArrayContent(content) };
-        foreach (var header in upload.GetProperty("headers").EnumerateObject()) request.Content.Headers.TryAddWithoutValidation(header.Name, header.Value.GetString());
-        return await Transfer.SendAsync(request);
-    }
-    private static Task<HttpResponseMessage> Confirm(HttpClient client, JsonElement upload) => client.PostAsync($"/uploads/{upload.GetProperty("id").GetGuid()}/complete", null);
-    private static async Task<JsonElement[]> Root(HttpClient client) => [.. (await Json(await client.GetAsync("/spaces/personal/elements"))).EnumerateArray()];
-
     [Fact]
     public async Task Uploaded_file_appears_in_the_personal_space_after_confirmation_and_downloads_under_its_name()
     {
@@ -113,22 +96,16 @@ public sealed class PersonalSpaceTests : TestInstance
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Equal(error, (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString());
     }
-    private async Task<Guid> Upload(HttpClient client, string name)
-    {
-        var upload = await Declare(client, name, Photo.Length);
-        Assert.Equal(HttpStatusCode.OK, (await Put(upload, Photo)).StatusCode);
-        return (await Json(await Confirm(client, upload))).GetProperty("id").GetGuid();
-    }
     [Fact]
     public async Task Personal_file_is_invisible_to_other_users_and_administrators()
     {
         var (_, member) = await User();
         var (_, other) = await User("other");
-        var file = await Upload(member, "private.jpg");
+        var file = Id(await Upload(member, "private.jpg"));
         var pending = await Declare(member, "pending.jpg", Photo.Length);
         Assert.Equal(HttpStatusCode.OK, (await Put(pending, Photo)).StatusCode);
         // The administrator account comes from the server command and has its own personal space.
-        var adminFile = await Upload(Admin, "private.jpg");
+        var adminFile = Id(await Upload(Admin, "private.jpg"));
 
         foreach (var intruder in new[] { other, Admin })
         {
@@ -158,7 +135,7 @@ public sealed class PersonalSpaceTests : TestInstance
 
         using var early = await SignIn("early");
         using var earlier = await SignIn("earlier");
-        var file = await Upload(early, "before.jpg");
+        var file = Id(await Upload(early, "before.jpg"));
         Assert.Equal(file, Assert.Single(await Root(early)).GetProperty("id").GetGuid());
         Assert.Empty(await Root(earlier));
         Assert.Equal(HttpStatusCode.NotFound, (await earlier.GetAsync($"/files/{file}/download")).StatusCode);
