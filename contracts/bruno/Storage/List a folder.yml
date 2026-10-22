@@ -1,7 +1,7 @@
 info:
   name: List a folder
   type: http
-  seq: 10
+  seq: 11
   tags:
     - Storage
 

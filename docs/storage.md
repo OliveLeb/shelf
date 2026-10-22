@@ -33,6 +33,9 @@ de secrets, jamais dans un fichier versionné :
 | `Storage__S3__AccessKey`, `Storage__S3__SecretKey` | Identifiants limités à ce bucket |
 | `Storage__S3__ForcePathStyle` | `true` pour l’adressage par chemin (MinIO) ; défaut `false` (sous-domaine) |
 | `Storage__SignedUrlMinutes` | Validité des URL signées ; défaut 15 |
+| `Storage__PartSizeMiB` | Taille des parties d’envoi ; défaut 16 Mio, minimum 5 Mio, augmentée pour rester sous 10 000 parties S3 |
+| `Storage__UploadExpiryHours` | Expiration d’un envoi non confirmé ; défaut 24 heures |
+| `Storage__UploadCleanupSeconds` | Intervalle de nettoyage des envois expirés ; défaut 300 secondes |
 | `Storage__S3__SingleCopyLimitBytes` | Limite de copie S3 simple du fournisseur ; défaut 5368709120 (5 Gio), entre 5 Mio et 5 Gio |
 | `Storage__S3__CopyPartSizeBytes` | Taille des parties de copie ; défaut 134217728 (128 Mio), entre 5 Mio et 5 Gio ; augmentée si nécessaire pour rester sous 10 000 parties |
 
@@ -63,7 +66,8 @@ JSON avec `Cache-Control: no-store` et signalent les erreurs par
 | `POST /elements/{id}/rename` | `name` | 200, élément renommé |
 | `POST /elements/{id}/move` | `parentId` (dossier de destination ; `null` : racine), `space` | 200, élément déplacé |
 | `POST /elements/{id}/copy` | `parentId` (dossier de destination ; `null` : racine), `space` (personnel par défaut) | 201, nouvel élément, avec son nom définitif |
-| `POST /uploads` | `name`, `size`, `contentType` (défaut `application/octet-stream`), `parentId`, `onConflict`, `space` ; ou `replaceFileId`, `size`, `contentType` pour remplacer un fichier précis | 201, `{id, url, method, headers, expiresAt}` |
+| `POST /uploads` | `name`, `size`, `contentType` (défaut `application/octet-stream`), `parentId`, `onConflict`, `space` ; ou `replaceFileId`, `size`, `contentType` pour remplacer un fichier précis | 201, `{id, method, headers, partSize, parts: [{number, url}], expiresAt}` |
+| `GET /uploads/{id}` | — | 200, même ticket avec uniquement les parties manquantes ou de taille incorrecte |
 | `POST /uploads/{id}/complete` | — | 201, fichier créé |
 | `GET /files/{id}/download` | — | 200, `{url, expiresAt}` |
 | `PUT /elements/{id}/shares/{recipientId}` | `level` (`read` ou `write`) | 200, partage créé ou mis à jour |
@@ -243,12 +247,29 @@ dossiers précèdent toujours les fichiers.
 ### Envoi
 
 1. Déclarer l’envoi avec `POST /uploads`. L’API réserve une clé d’objet et
-   renvoie une URL signée.
-2. Envoyer les octets avec la méthode `method` (`PUT`) sur `url`, avec exactement
-   les en-têtes `headers` : le type de contenu fait partie de la signature.
-3. Confirmer avec `POST /uploads/{id}/complete`. L’API vérifie auprès du S3 que
-   l’objet existe et que sa taille égale la taille déclarée. Le fichier
+   renvoie les URL signées dans `parts`, avec des numéros à partir de 1.
+2. Envoyer chaque tranche de `partSize` octets (la dernière peut être plus courte)
+   avec la méthode `method` (`PUT`) sur son `url`, avec exactement les en-têtes
+   `headers`. Les petits fichiers utilisent un PUT unique dont le type de contenu
+   fait partie de la signature ; les gros utilisent un envoi multipart S3.
+3. Après une interruption, `GET /uploads/{id}` renouvelle les URL des parties
+   manquantes ou de taille incorrecte, par lots d’au plus 1 000 parties. Répéter
+   jusqu’à recevoir une liste vide.
+4. Confirmer avec `POST /uploads/{id}/complete`. L’API vérifie les parties,
+   assemble l’objet puis vérifie que sa taille égale la taille déclarée. Le fichier
    n’apparaît qu’après cette confirmation.
+
+Shelf n’impose aucune limite applicative de taille ni quota ; les limites du
+fournisseur S3 restent applicables. Les URL ne dépassent jamais l’expiration
+de l’envoi. La reprise et la confirmation revérifient le droit d’écriture sur
+la destination ou le fichier remplacé, sous les verrous d’espace.
+
+La migration `009_multipart_uploads` suit les partages en Écriture. Les envois
+survivent à la disparition du compte, de l’espace, du dossier ou du fichier ciblé,
+sans pouvoir être confirmés. Après le délai configurable, une tâche de fond
+annule les envois multipart et supprime leurs objets, avec reprise au prochain
+passage si S3 est indisponible. Ce délai s’applique aussi après une révocation
+du droit d’écriture : les URL déjà délivrées doivent expirer avant la purge.
 
 `parentId` désigne le dossier de destination (absent ou `null` : racine de
 l’espace sélectionné, personnel par défaut). Le nom est vérifié dans la destination à la déclaration,
@@ -306,8 +327,9 @@ ensuite. Restaurer ce dossier ne les restaure pas implicitement.
 
 La purge anticipée, le vidage et l’expiration suppriment les métadonnées et
 inscrivent les clés S3 à supprimer **dans la même transaction PostgreSQL**, par
-des déclencheurs de suppression. Les objets des envois en cours emportés par un
-dossier purgé sont également inscrits. La confirmation d’un envoi transfère sa
+des déclencheurs de suppression. Les envois en cours dont le dossier est purgé
+sont conservés jusqu’à leur expiration pour annuler aussi leurs parties S3.
+La confirmation d’un envoi transfère sa
 clé au fichier avant de supprimer l’envoi : elle ne programme pas sa suppression.
 
 Une tâche hébergée dans chaque serveur HTTP vérifie l’expiration toutes les
@@ -358,7 +380,7 @@ selon RFC 5987). Les requêtes partielles (`Range`) sont prises en charge par le
 | 403 | `write_forbidden` | Écriture en Lecture seule, modification d’une racine partagée ou déplacement interdit hors de l’espace du propriétaire |
 | 403 | `sharing_forbidden` | Gestion des partages par un destinataire ou sur un élément commun |
 | 403 | `common_to_personal_forbidden` | Déplacement d’un élément commun vers un espace personnel |
-| 404 | `upload_not_found` | Envoi inconnu, déjà confirmé ou déclaré par un autre utilisateur |
+| 404 | `upload_not_found` | Envoi inconnu, expiré, sans destination, déjà confirmé ou déclaré par un autre utilisateur |
 | 404 | `element_not_found` | Élément inexistant ou invisible pour l’utilisateur (ou dossier passé au téléchargement) |
 | 404 | `folder_not_found` | Dossier parent, de destination ou listé inexistant, invisible, qui est un fichier ou ne correspond pas à `space` |
 | 404 | `trash_not_found` | Entrée de corbeille inexistante, inaccessible ou expirée lors d’une restauration |
@@ -375,8 +397,7 @@ accès au contenu.
 
 ## Limites actuelles
 
-L’envoi en plusieurs parties, l’expiration des envois
-abandonnés et les miniatures restent livrés par les autres sous-issues de #3.
+Les miniatures restent livrées par les autres sous-issues de #3.
 La file de suppression reçoit aussi les objets effacés par cascade lors de la
 suppression d’un compte ; la validation complète du cycle de vie des comptes et
 sa documentation d’authentification relèvent de #15.

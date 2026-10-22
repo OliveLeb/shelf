@@ -2,7 +2,9 @@ namespace Shelf.Api.Storage;
 
 /// <summary>Declares an upload into a folder, or the selected space's root (personal by default). OnConflict "keepBoth" renames; "replace" preserves the file and trashes its previous content. Alternatively, ReplaceFileId replaces exactly that file, without Name, ParentId, Space or OnConflict, even when its parent is hidden.</summary>
 public sealed record UploadRequest(string? Name, long? Size, string? ContentType, Guid? ParentId = null, string? OnConflict = null, string? Space = null, Guid? ReplaceFileId = null);
-public sealed record UploadTicket(Guid Id, string Url, string Method, IReadOnlyDictionary<string, string> Headers, DateTimeOffset ExpiresAt);
+/// <summary>Signed URLs for the parts still to send. Part n carries bytes [(n-1)·PartSize, n·PartSize) of the file.</summary>
+public sealed record UploadTicket(Guid Id, string Method, IReadOnlyDictionary<string, string> Headers, long PartSize, IReadOnlyList<UploadPart> Parts, DateTimeOffset ExpiresAt);
+public sealed record UploadPart(int Number, string Url);
 public sealed record FolderRequest(string? Name, Guid? ParentId = null, string? Space = null);
 public sealed record RenameRequest(string? Name);
 /// <summary>Moves into a visible folder or a space root. Without Space or ParentId, stays in the current space. Personal elements may move to common, never the reverse.</summary>

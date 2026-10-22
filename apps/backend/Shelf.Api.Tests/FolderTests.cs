@@ -94,7 +94,7 @@ public sealed class FolderTests : TestInstance
 
         // The name is free at declaration but taken before confirmation.
         var late = await Declare(member, "late.jpg", Photo.Length, onConflict: "keepBoth");
-        Assert.Equal(HttpStatusCode.OK, (await Put(late, Photo)).StatusCode);
+        await Put(late, Photo);
         await Upload(member, "late.jpg");
         Assert.Equal("late (1).jpg", (await Json(await Confirm(member, late))).GetProperty("name").GetString());
 
@@ -113,7 +113,7 @@ public sealed class FolderTests : TestInstance
             for (var i = 0; i < 6; i++)
             {
                 var upload = await Declare(member, "same.jpg", Photo.Length, parentId: burst, onConflict: onConflict);
-                Assert.Equal(HttpStatusCode.OK, (await Put(upload, Photo)).StatusCode);
+                await Put(upload, Photo);
                 uploads.Add(upload);
             }
             return await Task.WhenAll(uploads.Select((upload, i) => Confirm(devices[i], upload)));

@@ -1,7 +1,7 @@
 info:
   name: Permanently purge a trashed element
   type: http
-  seq: 19
+  seq: 20
   tags:
     - Storage
 

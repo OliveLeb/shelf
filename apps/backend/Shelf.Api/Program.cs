@@ -10,6 +10,7 @@ var generatingContract = System.Reflection.Assembly.GetEntryAssembly()?.GetName(
 if (generatingContract)
 {
     builder.Configuration["Authentication:ClientOrigin"] ??= "http://localhost";
+    builder.Configuration["ConnectionStrings:Shelf"] ??= "Host=localhost";
     builder.Configuration["Storage:S3:Endpoint"] ??= "http://localhost";
     foreach (var key in new[] { "Bucket", "AccessKey", "SecretKey", "Region" })
         builder.Configuration[$"Storage:S3:{key}"] ??= "openapi";

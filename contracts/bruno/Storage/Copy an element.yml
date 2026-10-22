@@ -1,7 +1,7 @@
 info:
   name: Copy an element
   type: http
-  seq: 14
+  seq: 15
   tags:
     - Storage
 

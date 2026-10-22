@@ -11,6 +11,7 @@ public static class HttpEndpoints
     public static void AddStorageBackend(this WebApplicationBuilder builder)
     {
         builder.Services.AddSingleton(services => new ObjectStore(services.GetRequiredService<IConfiguration>()));
+        builder.Services.AddHostedService<UploadCleanup>();
     }
 
     public static void MapStorageBackend(this WebApplication app)
@@ -49,6 +50,7 @@ public static class HttpEndpoints
         api.MapDelete("/elements/{id:guid}/shares/{recipientId:guid}", async (Guid id, Guid recipientId, HttpContext h) => { await Db(h).RemoveShare(Current(h), id, recipientId); return Results.NoContent(); }).Produces(204).WithSummary("Remove a share");
         api.MapGet("/spaces/personal/elements", async (string? sort, string? order, HttpContext h) => Results.Ok(await Db(h).Content(Current(h), null, sort, order))).Produces<List<Element>>().WithSummary("List the personal space root");
         api.MapGet("/spaces/common/elements", async (string? sort, string? order, HttpContext h) => Results.Ok(await Db(h).Content(Current(h), null, sort, order, "common"))).Produces<List<Element>>().WithSummary("List the common space root");
+        api.MapGet("/uploads/{id:guid}", async (Guid id, HttpContext h) => Results.Ok(await Db(h).Resume(Current(h), id))).Produces<UploadTicket>().WithSummary("Resume an upload");
         api.MapPost("/uploads", async (UploadRequest input, HttpContext h) => Results.Json(await Db(h).Declare(Current(h), input), statusCode: 201)).Produces<UploadTicket>(201).WithSummary("Declare an upload")
             .WithDescription("Requires write access to the destination. To replace a specific writable file, including a shared file with a hidden parent, send replaceFileId, size and contentType without name, parentId, space or onConflict. Old content goes to the owner's trash at confirmation.");
         api.MapPost("/uploads/{id:guid}/complete", async (Guid id, HttpContext h) => Results.Json(await Db(h).Complete(Current(h), id), statusCode: 201)).Produces<Element>(201).WithSummary("Complete an upload")

@@ -125,11 +125,17 @@ public sealed class TrashTests : TestInstance
         var kept = Id(await Upload(owner, "keep.jpg", content: "live"u8.ToArray()));
         var trashed = Id(await Upload(owner, "restore.jpg", content: "trashed"u8.ToArray()));
         await Delete(owner, trashed);
-        var pending = await Declare(owner, "pending.jpg", Photo.Length);
-        Assert.Equal(HttpStatusCode.OK, (await Put(pending, Photo)).StatusCode);
         await Delete(owner, folder);
         Assert.Equal(HttpStatusCode.NoContent, (await owner.DeleteAsync($"/trash/{folder}")).StatusCode);
-        await Eventually(async () => await ObjectCount() == 3);
+        if (!confirmed)
+        {
+            // Unconfirmed content is retained until the upload expires, even after its destination is purged.
+            Assert.Equal(3, await ObjectCount());
+            Clock.Advance(TimeSpan.FromHours(24));
+        }
+        await Eventually(async () => await ObjectCount() == 2);
+        var pending = await Declare(owner, "pending.jpg", Photo.Length);
+        Assert.Equal(HttpStatusCode.OK, (await Put(pending, Photo)).StatusCode);
         // Let the successful DELETE be acknowledged before replaying the still-valid write capability.
         await Task.Delay(1500);
 
@@ -264,6 +270,8 @@ public sealed class TrashTests : TestInstance
         Assert.Equal(HttpStatusCode.NotFound, (await owner.PostAsJsonAsync("/folders", new { name = "late", parentId = folder })).StatusCode);
         Assert.Equal(HttpStatusCode.NoContent, (await owner.DeleteAsync("/spaces/personal/trash")).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await Confirm(owner, pending)).StatusCode);
+        // The upload survives its destination until issued URLs expire, then its objects are purged.
+        Clock.Advance(TimeSpan.FromHours(24));
         await Eventually(async () => await ObjectCount() == 0);
     }
 

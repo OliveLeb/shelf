@@ -15,7 +15,7 @@ public sealed class PersonalSpaceTests : TestInstance
         var upload = await Declare(member, name, Photo.Length);
         Assert.Empty(await Root(member));
 
-        Assert.Equal(HttpStatusCode.OK, (await Put(upload, Photo)).StatusCode);
+        await Put(upload, Photo);
         Assert.Empty(await Root(member));
 
         var confirmation = await Confirm(member, upload);
@@ -39,7 +39,7 @@ public sealed class PersonalSpaceTests : TestInstance
         Assert.Equal("attachment", content.Content.Headers.ContentDisposition?.DispositionType);
 
         var logs = string.Join('\n', Logs.Messages);
-        foreach (var secret in new[] { upload.GetProperty("url").GetString()!, download.GetProperty("url").GetString()!, "X-Amz-Signature", S3SecretKey })
+        foreach (var secret in new[] { upload.GetProperty("parts")[0].GetProperty("url").GetString()!, download.GetProperty("url").GetString()!, "X-Amz-Signature", S3SecretKey })
             Assert.DoesNotContain(secret, logs);
     }
     [Fact]
@@ -51,13 +51,13 @@ public sealed class PersonalSpaceTests : TestInstance
         Assert.Equal(HttpStatusCode.Conflict, missing.StatusCode);
         Assert.Equal("upload_incomplete", (await missing.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString());
 
-        Assert.Equal(HttpStatusCode.OK, (await Put(upload, Photo[..^1])).StatusCode);
+        await Put(upload, Photo[..^1]);
         var truncated = await Confirm(member, upload);
         Assert.Equal(HttpStatusCode.Conflict, truncated.StatusCode);
         Assert.Equal("size_mismatch", (await truncated.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString());
         Assert.Empty(await Root(member));
 
-        Assert.Equal(HttpStatusCode.OK, (await Put(upload, Photo)).StatusCode);
+        await Put(upload, Photo);
         Assert.Equal(HttpStatusCode.Created, (await Confirm(member, upload)).StatusCode);
         Assert.Single(await Root(member));
         Assert.Equal(HttpStatusCode.NotFound, (await Confirm(member, upload)).StatusCode);
@@ -74,7 +74,7 @@ public sealed class PersonalSpaceTests : TestInstance
         Assert.Equal("name_conflict", (await declaration.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString());
         foreach (var upload in new[] { first, second })
         {
-            Assert.Equal(HttpStatusCode.OK, (await Put(upload, Photo)).StatusCode);
+            await Put(upload, Photo);
             var confirmation = await Confirm(member, upload);
             Assert.Equal(HttpStatusCode.Conflict, confirmation.StatusCode);
             Assert.Equal("name_conflict", (await confirmation.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString());
@@ -103,7 +103,7 @@ public sealed class PersonalSpaceTests : TestInstance
         var (_, other) = await User("other");
         var file = Id(await Upload(member, "private.jpg"));
         var pending = await Declare(member, "pending.jpg", Photo.Length);
-        Assert.Equal(HttpStatusCode.OK, (await Put(pending, Photo)).StatusCode);
+        await Put(pending, Photo);
         // The administrator account comes from the server command and has its own personal space.
         var adminFile = Id(await Upload(Admin, "private.jpg"));
 

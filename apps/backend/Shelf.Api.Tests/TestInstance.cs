@@ -72,7 +72,10 @@ public abstract class TestInstance : IAsyncLifetime
                 ["Storage:S3:Bucket"] = Bucket,
                 ["Storage:S3:AccessKey"] = s3AccessKey,
                 ["Storage:S3:SecretKey"] = S3SecretKey,
-                ["Storage:S3:ForcePathStyle"] = "true"
+                ["Storage:S3:ForcePathStyle"] = "true",
+                // The S3 minimum part size, so a few MiB exercise multipart uploads.
+                ["Storage:PartSizeMiB"] = "5",
+                ["Storage:UploadCleanupSeconds"] = "0.1"
             }));
             builder.ConfigureServices(services => services.AddSingleton<TimeProvider>(Clock));
             builder.ConfigureLogging(logging => logging.ClearProviders().AddProvider(Logs));
@@ -154,18 +157,30 @@ public abstract class TestInstance : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         return await Json(response);
     }
-    protected static async Task<HttpResponseMessage> Put(JsonElement upload, byte[] content)
+    /// <summary>Sends each part listed by an upload ticket (or only the given part numbers) with its slice of the content.</summary>
+    protected static async Task<HttpResponseMessage> Put(JsonElement upload, byte[] content, params int[] only)
     {
-        var request = new HttpRequestMessage(HttpMethod.Put, upload.GetProperty("url").GetString()) { Content = new ByteArrayContent(content) };
-        foreach (var header in upload.GetProperty("headers").EnumerateObject()) request.Content.Headers.TryAddWithoutValidation(header.Name, header.Value.GetString());
-        return await Transfer.SendAsync(request);
+        HttpResponseMessage response = null!;
+        var partSize = upload.GetProperty("partSize").GetInt64();
+        foreach (var part in upload.GetProperty("parts").EnumerateArray())
+        {
+            var number = part.GetProperty("number").GetInt32();
+            if (only.Length > 0 && !only.Contains(number)) continue;
+            var start = (int)Math.Min((number - 1) * partSize, content.Length);
+            var end = (int)Math.Min(start + partSize, content.Length);
+            var request = new HttpRequestMessage(HttpMethod.Put, part.GetProperty("url").GetString()) { Content = new ByteArrayContent(content[start..end]) };
+            foreach (var header in upload.GetProperty("headers").EnumerateObject()) request.Content.Headers.TryAddWithoutValidation(header.Name, header.Value.GetString());
+            response = await Transfer.SendAsync(request);
+            Assert.True(response.IsSuccessStatusCode, $"Part {number}: HTTP {(int)response.StatusCode} {await response.Content.ReadAsStringAsync()}");
+        }
+        return response;
     }
     protected static Task<HttpResponseMessage> Confirm(HttpClient client, JsonElement upload) => client.PostAsync($"/uploads/{upload.GetProperty("id").GetGuid()}/complete", null);
     protected static async Task<JsonElement> Upload(HttpClient client, string name, Guid? parentId = null, byte[]? content = null, string? onConflict = null)
     {
         content ??= Photo;
         var upload = await Declare(client, name, content.Length, parentId: parentId, onConflict: onConflict);
-        Assert.Equal(HttpStatusCode.OK, (await Put(upload, content)).StatusCode);
+        await Put(upload, content);
         return await Json(await Confirm(client, upload));
     }
     protected static async Task<JsonElement[]> Root(HttpClient client) => [.. (await Json(await client.GetAsync("/spaces/personal/elements"))).EnumerateArray()];
@@ -194,6 +209,8 @@ public abstract class TestInstance : IAsyncLifetime
     {
         using (S3)
         {
+            foreach (var upload in (await S3.ListMultipartUploadsAsync(Bucket)).MultipartUploads ?? [])
+                await S3.AbortMultipartUploadAsync(Bucket, upload.Key, upload.UploadId);
             var listing = new ListObjectsV2Request { BucketName = Bucket };
             ListObjectsV2Response page;
             do
