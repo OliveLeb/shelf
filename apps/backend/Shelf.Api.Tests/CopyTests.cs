@@ -220,6 +220,7 @@ public sealed class CopyTests : TestInstance
         var child = Id(await Json(await member.PostAsJsonAsync("/folders", new { name = "Child", parentId = folder })));
         await Upload(member, "first.jpg", folder);
         var broken = Id(await Upload(member, "broken.jpg", child));
+        await Eventually(async () => (await S3.ListObjectsV2Async(new() { BucketName = Bucket })).S3Objects.Count == 2);
         var link = await Json(await member.GetAsync($"/files/{broken}/download"));
         var key = new Uri(link.GetProperty("url").GetString()!).AbsolutePath.Split('/', 3)[2];
         if (changedSize) await S3.PutObjectAsync(new PutObjectRequest { BucketName = Bucket, Key = key, ContentBody = "wrong size" });
@@ -289,6 +290,7 @@ public sealed class CopyTests : TestInstance
     {
         var (_, member) = await User();
         var source = Id(await Upload(member, "photo.jpg"));
+        await Eventually(async () => (await S3.ListObjectsV2Async(new() { BucketName = Bucket })).S3Objects.Count == 1);
         // Delay publication after the real S3 copy completes, reproducing a slow database commit.
         await Sql("""
             CREATE FUNCTION slow_copy_commit() RETURNS trigger LANGUAGE plpgsql AS $$

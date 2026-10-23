@@ -93,6 +93,8 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
 
     public async Task<Element> Complete(Account account, Guid uploadId)
     {
+        // Publication creates an S3 object before its database reference commits, just like a copy.
+        await Run("SELECT pg_advisory_xact_lock_shared($1)", CopyReconciliationLock);
         // Serialize confirmation with replacement, trash, restore and moves before resolving the current name.
         await LockSpaces(account, moving: true, uploadId: uploadId);
         var upload = await PendingUpload(account, uploadId);
@@ -104,13 +106,21 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
             if (numbers.Any(n => parts[n].Size != upload.ExpectedSize(n))) throw new StorageError(409, "size_mismatch");
             await store.Assemble(upload.Key, upload.MultipartId, numbers.Select(n => parts[n]), cancellation);
         }
-        var size = await store.Size(upload.Key, cancellation);
-        if (size is null) throw new StorageError(409, "upload_incomplete");
-        if (size != upload.Size) throw new StorageError(409, "size_mismatch");
+        // Never publish a key for which the client has held a write capability. Copy validates
+        // size and pins every server-side copy to that metadata's ETag, including multipart copy.
+        var key = ObjectStore.NewKey();
+        try { await store.Copy(upload.Key, key, upload.Size, cancellation); }
+        catch (StorageError error) when (error.Code == "source_changed")
+        { throw new StorageError(409, "size_mismatch"); }
+        catch (Amazon.S3.AmazonS3Exception error) when (error.StatusCode == System.Net.HttpStatusCode.NotFound)
+        { throw new StorageError(409, "upload_incomplete"); }
+        catch (Amazon.S3.AmazonS3Exception error) when (error.StatusCode == System.Net.HttpStatusCode.PreconditionFailed)
+        { throw new StorageError(409, "source_changed"); }
+        // Failed publication/commit leaves an unreferenced files/ key for orphan reconciliation.
         if (upload.Target is Guid replacementId)
         {
             var target = await Access(account, replacementId);
-            var replaced = await ReplaceContent(account, replacementId, target.Space, upload.Key, upload.Size, upload.ContentType);
+            var replaced = await ReplaceContent(account, replacementId, target.Space, key, upload.Size, upload.ContentType);
             await Run("DELETE FROM uploads WHERE id=$1", uploadId);
             return replaced;
         }
@@ -121,7 +131,7 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
             if (existing.Count > 0)
             {
                 if (existing[0].Kind != "file") throw new StorageError(409, "name_conflict");
-                var replaced = await ReplaceContent(account, existing[0].Id, upload.Space, upload.Key, upload.Size, upload.ContentType);
+                var replaced = await ReplaceContent(account, existing[0].Id, upload.Space, key, upload.Size, upload.ContentType);
                 await Run("DELETE FROM uploads WHERE id=$1", uploadId);
                 return replaced;
             }
@@ -133,11 +143,12 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
             if (await Scalar("""
                 INSERT INTO elements (id, space_id, parent_id, kind, name, size, content_type, object_key, added_at, added_by)
                 VALUES ($1,$2,$3,'file',$4,$5,$6,$7,$8,$9) ON CONFLICT (space_id, parent_id, upper(name)) WHERE trash_id IS NULL DO NOTHING RETURNING id
-                """, id, upload.Space, upload.Parent, Numbered(upload.Name, number), upload.Size, upload.ContentType, upload.Key, clock.GetUtcNow(), account.Id) is not null)
+                """, id, upload.Space, upload.Parent, Numbered(upload.Name, number), upload.Size, upload.ContentType, key, clock.GetUtcNow(), account.Id) is not null)
                 break;
             if (upload.Policy != "keepBoth") throw new StorageError(409, "name_conflict");
         }
-        // Transfer the key before deleting the upload so the outbox does not delete confirmed content.
+        // The upload deletion trigger queues the temporary key, not the published content.
+        // Reconciliation also catches late PUTs that recreate an already deleted temporary key.
         await Run("DELETE FROM uploads WHERE id=$1", uploadId);
         return await Get(id);
     }

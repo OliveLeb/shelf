@@ -92,6 +92,7 @@ public sealed class TrashTests : TestInstance
         await Upload(owner, "a.jpg", folder);
         await Upload(owner, "b.jpg", folder);
         var kept = Id(await Upload(owner, "keep.jpg"));
+        await Eventually(async () => await ObjectCount() == 3); // Drain temporary keys before making S3 unavailable.
         // Real MinIO rejects this host's credentials; the fixture retains working credentials to inspect the bucket.
         await RestartApp(builder => builder.ConfigureAppConfiguration((_, config) =>
             config.AddInMemoryCollection(new Dictionary<string, string?> { ["Storage:S3:SecretKey"] = "intentionally-invalid-test-key" })));
@@ -130,7 +131,7 @@ public sealed class TrashTests : TestInstance
         if (!confirmed)
         {
             // Unconfirmed content is retained until the upload expires, even after its destination is purged.
-            Assert.Equal(3, await ObjectCount());
+            await Eventually(async () => await ObjectCount() == 3);
             Clock.Advance(TimeSpan.FromHours(24));
         }
         await Eventually(async () => await ObjectCount() == 2);
@@ -247,7 +248,7 @@ public sealed class TrashTests : TestInstance
         using var before = await SignIn("member");
         Assert.Equal(3, (await Trash(before)).Length);
         Assert.Equal(probe, Id(await Json(await Restore(before, probe))));
-        Assert.Equal(4, await ObjectCount());
+        await Eventually(async () => await ObjectCount() == 4);
 
         Clock.Advance(TimeSpan.FromSeconds(1));
         await Eventually(async () => (await Trash(before)).Length == 1);

@@ -41,7 +41,7 @@ public sealed class AccountStorageTests : TestInstance
         var common = await Folder(owner, "Family", "common");
         var commonFile = Id(await Upload(owner, "family.jpg", common));
         Assert.Equal(ownerId, (await Json(await recipient.GetAsync($"/folders/{common}/elements"))).EnumerateArray().Single().GetProperty("addedBy").GetProperty("id").GetGuid());
-        Assert.Equal(5, (await Objects()).Length);
+        await Eventually(async () => (await Objects()).Length == 5); // Drain temporary upload keys before denying S3 deletion.
 
         // The account transaction must succeed even while the S3 deletion worker cannot reach the bucket.
         await RestartApp(builder => builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(
@@ -86,6 +86,7 @@ public sealed class AccountStorageTests : TestInstance
         var trash = Id(await Upload(owner, "trash.jpg"));
         await Json(await owner.PutAsJsonAsync($"/elements/{folder}/shares/{recipientId}", new { level = "write" }));
         Assert.Equal(HttpStatusCode.NoContent, (await owner.DeleteAsync($"/elements/{trash}")).StatusCode);
+        await Eventually(async () => (await Objects()).Length == 2);
         var before = await Objects();
         Assert.Equal(HttpStatusCode.NoContent, (await Admin.PostAsync($"/admin/accounts/{ownerId}/disable", null)).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await owner.GetAsync("/spaces/personal/elements")).StatusCode);

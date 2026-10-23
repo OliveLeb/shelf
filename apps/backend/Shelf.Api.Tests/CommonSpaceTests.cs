@@ -155,6 +155,9 @@ public sealed class CommonSpaceTests : TestInstance
         root ??= Id(file);
         async Task<string[]> Objects() => [.. ((await S3.ListObjectsV2Async(new() { BucketName = Bucket })).S3Objects ?? [])
             .Select(o => $"{o.Key}:{o.ETag}:{o.LastModified:O}").Order(StringComparer.Ordinal)];
+        // Compare stable objects after the confirmed upload's temporary key has been drained.
+        for (var deadline = DateTime.UtcNow.AddSeconds(15); (await Objects()).Length != (folder ? 2 : 1); await Task.Delay(50))
+            Assert.True(DateTime.UtcNow < deadline, "Temporary upload key was not cleaned up");
         var before = await Objects();
         var destination = Id(await CommonFolder(other, "Destination"));
         foreach (var intruder in new[] { other, Admin })
@@ -165,6 +168,7 @@ public sealed class CommonSpaceTests : TestInstance
         Assert.Equal(memberId, moved.GetProperty("addedBy").GetProperty("id").GetGuid());
         Assert.Empty(await Root(member));
         Assert.Equal(root, Id(Assert.Single((await Json(await other.GetAsync($"/folders/{destination}/elements"))).EnumerateArray())));
+        Assert.Equal(before, await Objects()); // Moving preserves objects; confirming the pending upload below publishes a new key.
         if (nested is not null)
         {
             Assert.Equal(nested, Id(Assert.Single((await Json(await other.GetAsync($"/folders/{root}/elements"))).EnumerateArray())));
@@ -172,8 +176,10 @@ public sealed class CommonSpaceTests : TestInstance
             var confirmed = await Json(await Confirm(member, pending!.Value));
             Assert.Equal(memberId, confirmed.GetProperty("addedBy").GetProperty("id").GetGuid());
             Assert.Equal(2, (await Json(await other.GetAsync($"/folders/{nested}/elements"))).GetArrayLength());
+            for (var deadline = DateTime.UtcNow.AddSeconds(15); (await Objects()).Length != 2; await Task.Delay(50))
+                Assert.True(DateTime.UtcNow < deadline, "Temporary upload key was not cleaned up");
+            before = await Objects();
         }
-        Assert.Equal(before, await Objects());
         var download = await Json(await other.GetAsync($"/files/{Id(file)}/download"));
         Assert.Equal(Photo, await Transfer.GetByteArrayAsync(download.GetProperty("url").GetString()));
         // Explicit common root and inferred common root both preserve the element's common space.
