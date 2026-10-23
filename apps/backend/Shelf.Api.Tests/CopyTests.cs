@@ -13,6 +13,171 @@ namespace Shelf.Api.Tests;
 public sealed class CopyTests : TestInstance
 {
     [Fact]
+    public async Task Personal_copy_does_not_block_another_users_personal_write()
+    {
+        var (_, alice) = await User("alice");
+        var (_, bob) = await User("bob");
+        using var observer = await SignIn("alice", device: "observer");
+        var source = Id(await Upload(alice, "photo.jpg"));
+        await using var gate = await App.Services.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync();
+        await using (var command = new NpgsqlCommand("SELECT pg_advisory_lock(33001)", gate))
+            await command.ExecuteNonQueryAsync();
+        await Sql("""
+            CREATE FUNCTION hold_copy_commit() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN IF NEW.name='photo (1).jpg' THEN PERFORM pg_advisory_xact_lock(33001); END IF; RETURN NEW; END; $$;
+            CREATE CONSTRAINT TRIGGER hold_copy_commit AFTER INSERT ON elements
+                DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION hold_copy_commit();
+            """);
+        var copying = alice.PostAsJsonAsync($"/elements/{source}/copy", new { });
+        try
+        {
+            await WaitForGate(gate, 33001);
+            // The gate, not elapsed time, defines ordering. This deadline only detects a stuck request.
+            var folder = await Json(await bob.PostAsJsonAsync("/folders", new { name = "Independent" }).WaitAsync(TimeSpan.FromSeconds(10)));
+            Assert.Equal(Id(folder), Id(Assert.Single(await Root(bob))));
+            Assert.Equal(source, Id(Assert.Single(await Root(observer))));
+            Assert.False(copying.IsCompleted);
+        }
+        finally
+        {
+            await using var command = new NpgsqlCommand("SELECT pg_advisory_unlock(33001)", gate);
+            await command.ExecuteNonQueryAsync();
+        }
+        var copy = await Json(await copying);
+        Assert.Equal(2, (await Root(alice)).Length);
+        var link = await Json(await alice.GetAsync($"/files/{Id(copy)}/download"));
+        Assert.Equal(Photo, await Transfer.GetByteArrayAsync(link.GetProperty("url").GetString()));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Copy_relocks_a_source_or_destination_moved_to_common_while_waiting(bool movingSource)
+    {
+        var (_, alice) = await User("alice");
+        var (bobId, bob) = await User("bob");
+        var folder = Id(await Json(await alice.PostAsJsonAsync("/folders", new { name = "Moving" })));
+        var sharedFile = Id(await Upload(alice, "probe.jpg", folder));
+        var ownFile = Id(await Upload(bob, "probe.jpg"));
+        await Json(await alice.PutAsJsonAsync($"/elements/{folder}/shares/{bobId}", new { level = "write" }));
+        await using var gate = await App.Services.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync();
+        await using (var command = new NpgsqlCommand("SELECT pg_advisory_lock(33002), pg_advisory_lock(33003)", gate))
+            await command.ExecuteNonQueryAsync();
+        await Sql("""
+            CREATE FUNCTION gate_space_change() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN PERFORM pg_advisory_xact_lock(33002); RETURN NEW; END; $$;
+            CREATE CONSTRAINT TRIGGER gate_space_change AFTER UPDATE ON elements
+                DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+                WHEN (NEW.space_id IS DISTINCT FROM OLD.space_id) EXECUTE FUNCTION gate_space_change();
+            CREATE FUNCTION gate_copy_publication() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN PERFORM pg_advisory_xact_lock(33003); RETURN NEW; END; $$;
+            CREATE CONSTRAINT TRIGGER gate_copy_publication AFTER INSERT ON elements
+                DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION gate_copy_publication();
+            """);
+        var moving = alice.PostAsJsonAsync($"/elements/{folder}/move", new { space = "common" });
+        Task<HttpResponseMessage> copying;
+        Task<HttpResponseMessage> deleting;
+        try
+        {
+            await WaitForGate(gate, 33002);
+            copying = movingSource
+                ? bob.PostAsJsonAsync($"/elements/{sharedFile}/copy", new { })
+                : bob.PostAsJsonAsync($"/elements/{ownFile}/copy", new { parentId = folder });
+            await WaitForSpaceLock(gate);
+            await using (var command = new NpgsqlCommand("SELECT pg_advisory_unlock(33002)", gate))
+                await command.ExecuteNonQueryAsync();
+            await Json(await moving);
+            await WaitForGate(gate, 33003);
+            // A real conflicting operation in the NEW space must still wait for publication.
+            deleting = Admin.DeleteAsync($"/elements/{folder}");
+            await WaitForSpaceLock(gate);
+            Assert.False(copying.IsCompleted);
+            Assert.False(deleting.IsCompleted);
+        }
+        finally
+        {
+            await using var command = new NpgsqlCommand("SELECT pg_advisory_unlock_all()", gate);
+            await command.ExecuteNonQueryAsync();
+        }
+        var copy = await Json(await copying);
+        Assert.Equal(HttpStatusCode.NoContent, (await deleting).StatusCode);
+        Assert.Empty((await Json(await bob.GetAsync("/shares/received"))).EnumerateArray());
+        if (movingSource)
+        {
+            var link = await Json(await bob.GetAsync($"/files/{Id(copy)}/download"));
+            Assert.Equal(Photo, await Transfer.GetByteArrayAsync(link.GetProperty("url").GetString()));
+        }
+        else
+        {
+            Assert.Equal(HttpStatusCode.NotFound, (await bob.GetAsync($"/files/{Id(copy)}/download")).StatusCode);
+            await Json(await Admin.PostAsync($"/trash/{folder}/restore", null));
+            var children = (await Json(await Admin.GetAsync($"/folders/{folder}/elements"))).EnumerateArray().ToArray();
+            Assert.Equal(new[] { "probe (1).jpg", "probe.jpg" }, children.Select(e => e.GetProperty("name").GetString()).Order(StringComparer.Ordinal));
+            var link = await Json(await Admin.GetAsync($"/files/{Id(copy)}/download"));
+            Assert.Equal(Photo, await Transfer.GetByteArrayAsync(link.GetProperty("url").GetString()));
+        }
+    }
+
+    [Theory]
+    [InlineData(true, false, HttpStatusCode.NotFound)]
+    [InlineData(false, false, HttpStatusCode.NotFound)]
+    [InlineData(false, true, HttpStatusCode.Forbidden)]
+    public async Task Copy_rechecks_source_and_destination_permissions_after_waiting(bool sharedSource, bool downgrade, HttpStatusCode expected)
+    {
+        var (_, alice) = await User("alice");
+        var (bobId, bob) = await User("bob");
+        var folder = Id(await Json(await alice.PostAsJsonAsync("/folders", new { name = "Shared" })));
+        var sharedFile = Id(await Upload(alice, "shared.jpg", folder));
+        var ownFile = Id(await Upload(bob, "own.jpg"));
+        await Json(await alice.PutAsJsonAsync($"/elements/{folder}/shares/{bobId}", new { level = "write" }));
+        await using var gate = await App.Services.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync();
+        await using (var command = new NpgsqlCommand("SELECT pg_advisory_lock(33004)", gate))
+            await command.ExecuteNonQueryAsync();
+        await Sql("""
+            CREATE FUNCTION gate_share_change() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN PERFORM pg_advisory_xact_lock(33004); RETURN NULL; END; $$;
+            CREATE TRIGGER gate_share_change AFTER UPDATE OR DELETE ON shares
+                FOR EACH ROW EXECUTE FUNCTION gate_share_change();
+            """);
+        var changing = downgrade
+            ? alice.PutAsJsonAsync($"/elements/{folder}/shares/{bobId}", new { level = "read" })
+            : alice.DeleteAsync($"/elements/{folder}/shares/{bobId}");
+        Task<HttpResponseMessage> copying;
+        try
+        {
+            await WaitForGate(gate, 33004);
+            copying = sharedSource
+                ? bob.PostAsJsonAsync($"/elements/{sharedFile}/copy", new { })
+                : bob.PostAsJsonAsync($"/elements/{ownFile}/copy", new { parentId = folder });
+            await WaitForSpaceLock(gate);
+        }
+        finally
+        {
+            await using var command = new NpgsqlCommand("SELECT pg_advisory_unlock(33004)", gate);
+            await command.ExecuteNonQueryAsync();
+        }
+        Assert.True((await changing).IsSuccessStatusCode);
+        var response = await copying;
+        Assert.Equal(expected, response.StatusCode);
+        Assert.Equal(downgrade ? "write_forbidden" : sharedSource ? "element_not_found" : "folder_not_found", await Error(response));
+        Assert.Equal(ownFile, Id(Assert.Single(await Root(bob))));
+        Assert.Equal(sharedFile, Id(Assert.Single((await Json(await alice.GetAsync($"/folders/{folder}/elements"))).EnumerateArray())));
+    }
+
+    private static Task WaitForGate(NpgsqlConnection connection, int id) => Eventually(async () =>
+    {
+        await using var command = new NpgsqlCommand("SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype='advisory' AND objid=$1 AND NOT granted AND database=(SELECT oid FROM pg_database WHERE datname=current_database()))", connection);
+        command.Parameters.AddWithValue(id);
+        return (bool)(await command.ExecuteScalarAsync())!;
+    });
+
+    private static Task WaitForSpaceLock(NpgsqlConnection connection) => Eventually(async () =>
+    {
+        await using var command = new NpgsqlCommand("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT id FROM spaces%')", connection);
+        return (bool)(await command.ExecuteScalarAsync())!;
+    });
+
+    [Fact]
     public async Task Same_session_reads_complete_before_a_gated_copy_is_published()
     {
         var (_, member) = await User();
