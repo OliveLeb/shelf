@@ -178,6 +178,55 @@ public sealed class CopyTests : TestInstance
     });
 
     [Fact]
+    public async Task Same_session_reads_complete_before_a_gated_copy_is_published()
+    {
+        var (_, member) = await User();
+        using var control = await SignIn("member");
+        var sessions = await Json(await member.GetAsync("/account/sessions"));
+        var sessionId = sessions.EnumerateArray().Single(s => s.GetProperty("isCurrent").GetBoolean()).GetProperty("id").GetGuid();
+        var startedAt = Clock.GetUtcNow();
+        var source = Id(await Upload(member, "photo.jpg"));
+        await using var gate = await App.Services.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync();
+        // Holding the account-operations lock must not stop storage authentication or reads.
+        await using (var command = new NpgsqlCommand("SELECT pg_advisory_lock(340034); SELECT pg_advisory_lock(742013510)", gate)) await command.ExecuteNonQueryAsync();
+        await Sql("""
+            CREATE FUNCTION gate_copy() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN IF NEW.name='photo (1).jpg' THEN PERFORM pg_advisory_xact_lock(340034); END IF; RETURN NEW; END; $$;
+            CREATE CONSTRAINT TRIGGER gate_copy AFTER INSERT ON elements
+                DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION gate_copy();
+            """);
+        var copying = member.PostAsJsonAsync($"/elements/{source}/copy", new { });
+        try
+        {
+            await Eventually(async () =>
+            {
+                await using var command = new NpgsqlCommand("SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype='advisory' AND objid=340034 AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND NOT granted)", gate);
+                return (bool)(await command.ExecuteScalarAsync())!;
+            });
+            // The other session is only a control; both reads must finish while publication is held.
+            Assert.Equal(source, Id(Assert.Single(await Root(control).WaitAsync(TimeSpan.FromSeconds(15)))));
+            Clock.Advance(TimeSpan.FromDays(2));
+            Assert.Equal(source, Id(Assert.Single(await Root(member).WaitAsync(TimeSpan.FromSeconds(15)))));
+            // An older timestamp must not undo the newer activity, even during another operation.
+            Clock.Advance(TimeSpan.FromDays(-1));
+            Assert.Equal(source, Id(Assert.Single(await Root(member).WaitAsync(TimeSpan.FromSeconds(15)))));
+            Assert.False(copying.IsCompleted);
+        }
+        finally
+        {
+            await using var command = new NpgsqlCommand("SELECT pg_advisory_unlock(340034); SELECT pg_advisory_unlock(742013510)", gate);
+            await command.ExecuteNonQueryAsync();
+        }
+        var copy = await Json(await copying);
+        var activity = (await Json(await control.GetAsync("/account/sessions"))).EnumerateArray().Single(s => s.GetProperty("id").GetGuid() == sessionId);
+        Assert.InRange(startedAt.AddDays(2) - activity.GetProperty("lastSeenAt").GetDateTimeOffset(), TimeSpan.Zero, TimeSpan.FromMicroseconds(1));
+        Assert.InRange(startedAt.AddDays(32) - activity.GetProperty("expiresAt").GetDateTimeOffset(), TimeSpan.Zero, TimeSpan.FromMicroseconds(1));
+        Assert.Equal(2, (await Root(member)).Length);
+        var link = await Json(await member.GetAsync($"/files/{Id(copy)}/download"));
+        Assert.Equal(Photo, await Transfer.GetByteArrayAsync(link.GetProperty("url").GetString()));
+    }
+
+    [Fact]
     public async Task Read_recipient_copies_a_folder_recursively_into_their_own_space_without_shares()
     {
         var (_, owner) = await User("alice");
@@ -341,11 +390,7 @@ public sealed class CopyTests : TestInstance
         var file = Id(await Upload(member, "photo.jpg", source));
         await Json(await member.PostAsJsonAsync("/folders", new { name = "PHOTO.JPG" }));
         await Upload(member, "photo (1).jpg", content: "do not replace"u8.ToArray());
-        // Distinct sessions avoid serializing requests on a session's last_seen_at update.
-        var devices = await Task.WhenAll(Enumerable.Range(0, 4).Select(i => SignIn("member", device: $"copier-{i}")));
-        HttpResponseMessage[] responses;
-        try { responses = await Task.WhenAll(devices.Select(device => device.PostAsJsonAsync($"/elements/{file}/copy", new { }))); }
-        finally { foreach (var device in devices) device.Dispose(); }
+        var responses = await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => member.PostAsJsonAsync($"/elements/{file}/copy", new { })));
         var copies = await Task.WhenAll(responses.Select(Json));
         Assert.All(responses, r => Assert.Equal(HttpStatusCode.Created, r.StatusCode));
         Assert.Equal(new[] { "photo (2).jpg", "photo (3).jpg", "photo (4).jpg", "photo (5).jpg" },
