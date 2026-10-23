@@ -114,6 +114,55 @@ public sealed class UploadIntegrityTests : TestInstance
         Assert.Equal("restored"u8.ToArray(), await Transfer.GetByteArrayAsync(download.GetProperty("url").GetString()));
     }
 
+    [Fact]
+    public async Task A_source_change_between_multipart_copy_parts_cannot_publish_mixed_content()
+    {
+        await using var proxy = await S3Proxy.Start();
+        await RestartApp(builder => builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["Storage:S3:Endpoint"] = proxy.Endpoint,
+                ["Storage:S3:SingleCopyLimitBytes"] = "5242880",
+                ["Storage:S3:CopyPartSizeBytes"] = "5242880"
+            })));
+        var (_, member) = await User();
+        var bytes = new byte[10 * 1024 * 1024 + 17];
+        bytes[0] = 19;
+        bytes[^1] = 73;
+        var upload = await Declare(member, "file.bin", bytes.Length, "application/octet-stream");
+        await Put(upload, bytes);
+        var temporary = new Uri(upload.GetProperty("parts")[0].GetProperty("url").GetString()!).AbsolutePath.Split('/', 3)[2];
+        var changed = new byte[bytes.Length];
+        Array.Fill(changed, (byte)41);
+        var faultApplied = false;
+        proxy.Intercept = async context =>
+        {
+            if (context.Request.Headers.ContainsKey("x-amz-copy-source") && context.Request.Query["partNumber"] == "2" && !faultApplied)
+            {
+                faultApplied = true;
+                // Provider-side fault: client multipart capabilities are already consumed at assembly.
+                await S3.PutObjectAsync(new()
+                {
+                    BucketName = Bucket, Key = temporary, InputStream = new MemoryStream(changed), ContentType = "application/octet-stream"
+                });
+            }
+            return false;
+        };
+        var failed = await Confirm(member, upload);
+        Assert.True(faultApplied);
+        Assert.Equal(HttpStatusCode.Conflict, failed.StatusCode);
+        Assert.Equal("source_changed", await Error(failed));
+        Assert.Empty(await Root(member));
+        Assert.Empty((await S3.ListMultipartUploadsAsync(Bucket)).MultipartUploads ?? []);
+        Assert.Single(await Objects());
+
+        var file = await Json(await Confirm(member, upload));
+        Assert.Equal(bytes.Length, file.GetProperty("size").GetInt64());
+        var download = await Json(await member.GetAsync($"/files/{Id(file)}/download"));
+        Assert.Equal(changed, await Transfer.GetByteArrayAsync(download.GetProperty("url").GetString()));
+        await Eventually(async () => (await Objects()).Length == 1);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -167,8 +216,10 @@ public sealed class UploadIntegrityTests : TestInstance
         Assert.Equal(Id(file), Id(Assert.Single(await Root(member))));
     }
 
-    [Fact]
-    public async Task S3_publication_failure_can_be_retried_and_temporary_deletion_survives_failure_and_restart()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task S3_publication_failure_can_be_retried_and_temporary_deletion_survives_failure_and_restart(bool copiedBeforeFailure)
     {
         await using var proxy = await S3Proxy.Start();
         await RestartApp(builder => builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(
@@ -176,24 +227,28 @@ public sealed class UploadIntegrityTests : TestInstance
         var (_, member) = await User();
         var upload = await Declare(member, "file.bin", 8, "application/octet-stream");
         await Put(upload, "original"u8.ToArray());
-        proxy.Intercept = async context =>
+        static async Task<bool> Fail(HttpContext context)
         {
-            if (!context.Request.Headers.ContainsKey("x-amz-copy-source") && context.Request.Method != "DELETE") return false;
+            context.Response.Clear();
             context.Response.StatusCode = 503;
             context.Response.ContentType = "application/xml";
             await context.Response.WriteAsync("<Error><Code>ServiceUnavailable</Code></Error>");
             return true;
-        };
+        }
+        proxy.Intercept = context => context.Request.Method == "DELETE"
+            || !copiedBeforeFailure && context.Request.Headers.ContainsKey("x-amz-copy-source")
+            ? Fail(context) : Task.FromResult(false);
+        if (copiedBeforeFailure) proxy.AfterCopy = Fail;
         var failed = await Confirm(member, upload);
         Assert.Equal(HttpStatusCode.ServiceUnavailable, failed.StatusCode);
         Assert.Equal("storage_unavailable", await Error(failed));
         Assert.Empty(await Root(member));
-        Assert.Single(await Objects());
-        var failDeletes = proxy.Intercept;
-        proxy.Intercept = context => context.Request.Method == "DELETE" ? failDeletes(context) : Task.FromResult(false);
+        Assert.Equal(copiedBeforeFailure ? 2 : 1, (await Objects()).Length);
+        proxy.AfterCopy = _ => Task.FromResult(false);
+        proxy.Intercept = context => context.Request.Method == "DELETE" ? Fail(context) : Task.FromResult(false);
         var file = await Json(await Confirm(member, upload));
         await Eventually(() => Task.FromResult(Logs.Messages.Any(message => message.Contains("object_deletion_retry", StringComparison.Ordinal))));
-        Assert.Equal(2, (await Objects()).Length);
+        Assert.Equal(copiedBeforeFailure ? 3 : 2, (await Objects()).Length);
         // Restart with the healthy S3 endpoint and advance past the durable deletion retry.
         await RestartApp();
         member = await SignIn("member");
@@ -214,10 +269,11 @@ public sealed class UploadIntegrityTests : TestInstance
         await Put(upload, "original"u8.ToArray());
         var copied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        proxy.AfterCopy = async () =>
+        proxy.AfterCopy = async _ =>
         {
             copied.TrySetResult();
             await release.Task.WaitAsync(TimeSpan.FromSeconds(20));
+            return false;
         };
         var confirming = Confirm(member, upload);
         JsonElement file;
@@ -256,7 +312,7 @@ public sealed class UploadIntegrityTests : TestInstance
         private readonly HttpClient upstream = new();
         public string Endpoint => app.Urls.Single();
         public Func<HttpContext, Task<bool>> Intercept { get; set; } = _ => Task.FromResult(false);
-        public Func<Task> AfterCopy { get; set; } = () => Task.CompletedTask;
+        public Func<HttpContext, Task<bool>> AfterCopy { get; set; } = _ => Task.FromResult(false);
 
         public static async Task<S3Proxy> Start()
         {
@@ -285,7 +341,7 @@ public sealed class UploadIntegrityTests : TestInstance
                 foreach (var header in response.Headers.Concat(response.Content.Headers))
                     context.Response.Headers[header.Key] = header.Value.ToArray();
                 context.Response.Headers.Remove("transfer-encoding");
-                if (request.Headers.Contains("x-amz-copy-source") && response.IsSuccessStatusCode) await proxy.AfterCopy();
+                if (request.Headers.Contains("x-amz-copy-source") && response.IsSuccessStatusCode && await proxy.AfterCopy(context)) return;
                 if (context.Request.Method != "HEAD") await response.Content.CopyToAsync(context.Response.Body);
             });
             await app.StartAsync();
