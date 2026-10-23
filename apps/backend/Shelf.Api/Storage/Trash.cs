@@ -56,13 +56,13 @@ public sealed partial class StorageTransaction
     public async Task<List<TrashedElement>> Trash(Account account, string space)
     {
         var spaceId = await Destination(account, null, space);
-        return await Query("""
-            SELECT e.id, e.kind, e.name, e.parent_id, e.size, e.content_type, e.added_at, a.id, a.username,
-                t.original_parent_id, t.original_path, t.deleted_at, d.id, d.username, e.thumbnail_state
+        return await Query($"""
+            SELECT {ElementColumns},
+                t.original_parent_id, t.original_path, t.deleted_at, d.id, d.username
             FROM trash_entries t JOIN elements e ON e.id=t.id LEFT JOIN accounts a ON a.id=e.added_by
             LEFT JOIN accounts d ON d.id=t.deleted_by WHERE t.space_id=$1 ORDER BY t.deleted_at, t.id
-            """, r => new TrashedElement(r.GetGuid(0), ReadElement(r), r.IsDBNull(9) ? null : r.GetGuid(9),
-                r.GetString(10), r.GetFieldValue<DateTimeOffset>(11), r.IsDBNull(12) ? null : new AccountSummary(r.GetGuid(12), r.GetString(13))), spaceId);
+            """, r => new TrashedElement(r.GetGuid(0), ReadElement(r), r.IsDBNull(10) ? null : r.GetGuid(10),
+                r.GetString(11), r.GetFieldValue<DateTimeOffset>(12), r.IsDBNull(13) ? null : new AccountSummary(r.GetGuid(13), r.GetString(14))), spaceId);
     }
 
     private async Task<(Guid Space, Guid? Parent)> TrashAccess(Account account, Guid id)
@@ -77,7 +77,7 @@ public sealed partial class StorageTransaction
 
     public async Task<Element> Restore(Account account, Guid id)
     {
-        await LockSpaces(account, moving: true);
+        await LockSpaces(account, moving: true, elementId: id);
         var entry = await TrashAccess(account, id);
         if (await Scalar("SELECT 1 FROM trash_entries WHERE id=$1 AND deleted_at>$2", id, clock.GetUtcNow().AddDays(-30)) is null)
             throw new StorageError(404, "trash_not_found");
@@ -98,7 +98,7 @@ public sealed partial class StorageTransaction
 
     public async Task Purge(Account account, Guid id)
     {
-        await LockSpaces(account, moving: true);
+        await LockSpaces(account, moving: true, elementId: id);
         await TrashAccess(account, id);
         // Cascades remove the entire snapshot; database triggers enqueue every object in this transaction.
         await Run("DELETE FROM trash_entries WHERE id=$1", id);
@@ -106,7 +106,7 @@ public sealed partial class StorageTransaction
 
     public async Task EmptyTrash(Account account, string space)
     {
-        await LockSpaces(account, moving: true);
+        await LockSpaces(account, moving: true, rootSpace: space);
         var spaceId = await Destination(account, null, space);
         await Run("DELETE FROM trash_entries WHERE space_id=$1", spaceId);
     }

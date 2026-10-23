@@ -38,15 +38,15 @@ public sealed class TrashWorker(NpgsqlDataSource source, ObjectStore store, Time
         var page = await store.ListFiles(continuation, cancellation);
         await using var connection = await source.OpenConnectionAsync(cancellation);
         await using var transaction = await connection.BeginTransactionAsync(cancellation);
-        // A copy's objects are visible in S3 before its metadata commits. Wait before taking
-        // the reference snapshot, including when another API replica is performing the copy.
+        // Published objects are visible in S3 before their metadata commits. Wait before taking
+        // the reference snapshot, including confirmations/copies/miniatures on another API replica.
         await using (var gate = new NpgsqlCommand("SELECT pg_advisory_xact_lock($1)", connection, transaction))
         {
-            gate.Parameters.AddWithValue(StorageTransaction.CopyReconciliationLock);
+            gate.Parameters.AddWithValue(StorageTransaction.ObjectPublicationReconciliationLock);
             await gate.ExecuteNonQueryAsync(cancellation);
         }
         // An old signed PUT (including one finishing after URL expiry) can recreate an acknowledged deletion.
-        // Upload keys commit before their URLs are returned; confirmation transfers ownership atomically.
+        // Upload keys commit before their URLs are returned; confirmation references a fresh final key.
         // Use one DB snapshot for both owners, including trashed files and unconfirmed uploads.
         await using var command = new NpgsqlCommand("""
             INSERT INTO object_deletions (object_key)

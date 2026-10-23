@@ -6,11 +6,12 @@ namespace Shelf.Api.Storage;
 /// <summary>Storage operations in one PostgreSQL transaction, without the account advisory lock.</summary>
 public sealed partial class StorageTransaction(NpgsqlConnection connection, NpgsqlTransaction transaction, ObjectStore store, TimeProvider clock, CancellationToken cancellation)
 {
-    private const string ElementColumns = "e.id, e.kind, e.name, e.parent_id, e.size, e.content_type, e.added_at, a.id, a.username, e.thumbnail_state FROM elements e JOIN spaces s ON s.id=e.space_id LEFT JOIN accounts a ON a.id=e.added_by";
+    // Keep these ten columns in ReadElement order; query-specific fields follow them.
+    private const string ElementColumns = "e.id, e.kind, e.name, e.parent_id, e.size, e.content_type, e.added_at, a.id, a.username, e.thumbnail_state";
     private static Element ReadElement(NpgsqlDataReader r) => new(r.GetGuid(0), r.GetString(1), r.GetString(2),
         r.IsDBNull(3) ? null : r.GetGuid(3), r.IsDBNull(4) ? null : r.GetInt64(4), r.IsDBNull(5) ? null : r.GetString(5), r.GetFieldValue<DateTimeOffset>(6),
         r.IsDBNull(7) ? null : new AccountSummary(r.GetGuid(7), r.GetString(8)),
-        r.IsDBNull(r.GetOrdinal("thumbnail_state")) ? null : r.GetString(r.GetOrdinal("thumbnail_state")));
+        r.IsDBNull(9) ? null : r.GetString(9));
     private static readonly Dictionary<string, string> Sorts = new() { ["name"] = "lower(e.name) {0}, e.name {0}", ["addedAt"] = "e.added_at {0}", ["size"] = "e.size {0}" };
 
     /// <summary>Content of a visible folder, or of the selected space's root. Folders come before files.</summary>
@@ -19,14 +20,19 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
         if (!Sorts.TryGetValue(sort ?? "name", out var key)) throw new StorageError(400, "invalid_sort");
         if ((order ??= "asc") is not ("asc" or "desc")) throw new StorageError(400, "invalid_order");
         var destination = await Destination(account, folderId, space, writable: false);
-        return await Query($"SELECT {ElementColumns} WHERE e.space_id=$1 AND e.parent_id IS NOT DISTINCT FROM $2 AND e.trash_id IS NULL ORDER BY e.kind='file', {string.Format(key, order)}, lower(e.name), e.id",
+        return await Query($"""
+            SELECT {ElementColumns}
+            FROM elements e JOIN spaces s ON s.id=e.space_id LEFT JOIN accounts a ON a.id=e.added_by
+            WHERE e.space_id=$1 AND e.parent_id IS NOT DISTINCT FROM $2 AND e.trash_id IS NULL
+            ORDER BY e.kind='file', {string.Format(key, order)}, lower(e.name), e.id
+            """,
             ReadElement, destination, folderId);
     }
 
     public async Task<Element> CreateFolder(Account account, FolderRequest input)
     {
         var name = Name(input.Name);
-        await LockSpaces(account, folderId: input.ParentId);
+        await LockSpaces(account, folderId: input.ParentId, rootSpace: input.ParentId is null ? input.Space ?? "personal" : null);
         var space = await Destination(account, input.ParentId, input.Space);
         var id = Guid.NewGuid();
         await Run("INSERT INTO elements (id, space_id, parent_id, kind, name, added_at, added_by) VALUES ($1,$2,$3,'folder',$4,$5,$6)",
@@ -48,7 +54,8 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
         if (input.Size is not >= 0) throw new StorageError(400, "invalid_size");
         var contentType = ContentType(input.ContentType);
         if (input.OnConflict is not (null or "keepBoth" or "replace")) throw new StorageError(400, "invalid_conflict_policy");
-        await LockSpaces(account, elementId: input.ReplaceFileId, folderId: input.ParentId);
+        await LockSpaces(account, elementId: input.ReplaceFileId, folderId: input.ParentId,
+            rootSpace: input.ReplaceFileId is null && input.ParentId is null ? input.Space ?? "personal" : null);
         string name;
         Guid space;
         if (input.ReplaceFileId is Guid fileId)
@@ -93,6 +100,8 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
 
     public async Task<Element> Complete(Account account, Guid uploadId)
     {
+        // Publication creates an S3 object before its database reference commits, just like a copy.
+        await Run("SELECT pg_advisory_xact_lock_shared($1)", ObjectPublicationReconciliationLock);
         // Serialize confirmation with replacement, trash, restore and moves before resolving the current name.
         await LockSpaces(account, moving: true, uploadId: uploadId);
         var upload = await PendingUpload(account, uploadId);
@@ -104,13 +113,21 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
             if (numbers.Any(n => parts[n].Size != upload.ExpectedSize(n))) throw new StorageError(409, "size_mismatch");
             await store.Assemble(upload.Key, upload.MultipartId, numbers.Select(n => parts[n]), cancellation);
         }
-        var size = await store.Size(upload.Key, cancellation);
-        if (size is null) throw new StorageError(409, "upload_incomplete");
-        if (size != upload.Size) throw new StorageError(409, "size_mismatch");
+        // Never publish a key for which the client has held a write capability. Copy validates
+        // size and pins every server-side copy to that metadata's ETag, including multipart copy.
+        var key = ObjectStore.NewKey();
+        try { await store.Copy(upload.Key, key, upload.Size, cancellation); }
+        catch (StorageError error) when (error.Code == "source_changed")
+        { throw new StorageError(409, "size_mismatch"); }
+        catch (Amazon.S3.AmazonS3Exception error) when (error.StatusCode == System.Net.HttpStatusCode.NotFound)
+        { throw new StorageError(409, "upload_incomplete"); }
+        catch (Amazon.S3.AmazonS3Exception error) when (error.StatusCode == System.Net.HttpStatusCode.PreconditionFailed)
+        { throw new StorageError(409, "source_changed"); }
+        // Failed publication/commit leaves an unreferenced files/ key for orphan reconciliation.
         if (upload.Target is Guid replacementId)
         {
             var target = await Access(account, replacementId);
-            var replaced = await ReplaceContent(account, replacementId, target.Space, upload.Key, upload.Size, upload.ContentType);
+            var replaced = await ReplaceContent(account, replacementId, target.Space, key, upload.Size, upload.ContentType);
             await Run("DELETE FROM uploads WHERE id=$1", uploadId);
             return replaced;
         }
@@ -121,7 +138,7 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
             if (existing.Count > 0)
             {
                 if (existing[0].Kind != "file") throw new StorageError(409, "name_conflict");
-                var replaced = await ReplaceContent(account, existing[0].Id, upload.Space, upload.Key, upload.Size, upload.ContentType);
+                var replaced = await ReplaceContent(account, existing[0].Id, upload.Space, key, upload.Size, upload.ContentType);
                 await Run("DELETE FROM uploads WHERE id=$1", uploadId);
                 return replaced;
             }
@@ -133,11 +150,12 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
             if (await Scalar("""
                 INSERT INTO elements (id, space_id, parent_id, kind, name, size, content_type, object_key, added_at, added_by)
                 VALUES ($1,$2,$3,'file',$4,$5,$6,$7,$8,$9) ON CONFLICT (space_id, parent_id, upper(name)) WHERE trash_id IS NULL DO NOTHING RETURNING id
-                """, id, upload.Space, upload.Parent, Numbered(upload.Name, number), upload.Size, upload.ContentType, upload.Key, clock.GetUtcNow(), account.Id) is not null)
+                """, id, upload.Space, upload.Parent, Numbered(upload.Name, number), upload.Size, upload.ContentType, key, clock.GetUtcNow(), account.Id) is not null)
                 break;
             if (upload.Policy != "keepBoth") throw new StorageError(409, "name_conflict");
         }
-        // Transfer the key before deleting the upload so the outbox does not delete confirmed content.
+        // The upload deletion trigger queues the temporary key, not the published content.
+        // Reconciliation also catches late PUTs that recreate an already deleted temporary key.
         await Run("DELETE FROM uploads WHERE id=$1", uploadId);
         return await Get(id);
     }
@@ -204,7 +222,8 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
     /// <summary>Moving changes metadata only; the S3 object key does not depend on the folder.</summary>
     public async Task<Element> Move(Account account, Guid elementId, MoveRequest input)
     {
-        await LockSpaces(account, moving: true, elementId: elementId, folderId: input.ParentId);
+        await LockSpaces(account, moving: true, elementId: elementId, folderId: input.ParentId,
+            rootSpace: input.ParentId is null ? input.Space ?? "source" : null);
         var access = await Access(account, elementId);
         await RequireMutableSubtree(account, elementId, access);
         var space = access.Space;
@@ -237,15 +256,42 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
         return await Get(elementId);
     }
 
-    /// <summary>Writes share locks; moves exclude writes so a subtree cannot gain children during transfer.
-    /// Lock personal, common and operation-specific spaces in UUID order, including another owner's shared space.
-    /// NO KEY UPDATE lets foreign key checks proceed, and concurrent ordinary writes remain possible.</summary>
-    private Task LockSpaces(Account account, bool moving = false, Guid? elementId = null, Guid? folderId = null, Guid? uploadId = null) => Run($"""
-        SELECT id FROM spaces WHERE owner_id=$1 OR owner_id IS NULL
-            OR id IN (SELECT space_id FROM elements WHERE id=$2 OR id=$3)
-            OR id IN (SELECT space_id FROM uploads WHERE id=$4 AND account_id=$1)
-        ORDER BY id FOR {(moving ? "NO KEY UPDATE" : "SHARE")}
-        """, account.Id, elementId, folderId, uploadId);
+    /// <summary>Lock only affected spaces, in PostgreSQL UUID order. Ordinary writes share locks;
+    /// moves exclude writes so a subtree cannot gain children during transfer. NO KEY UPDATE
+    /// still permits foreign key checks. A "source" root preserves a common source's space on move.</summary>
+    private async Task LockSpaces(Account account, bool moving = false, Guid? elementId = null, Guid? folderId = null,
+        Guid? uploadId = null, string? rootSpace = null)
+    {
+        Task<List<Guid>> Resolve() => Query("""
+            SELECT s.id FROM spaces s WHERE
+                (s.owner_id=$1 AND ($5='personal' OR ($5='source' AND NOT EXISTS (
+                    SELECT 1 FROM elements e JOIN spaces source ON source.id=e.space_id
+                    WHERE e.id=$2 AND source.owner_id IS NULL))))
+                OR (s.owner_id IS NULL AND $5='common')
+                OR s.id IN (SELECT space_id FROM elements WHERE id=$2 OR id=$3)
+                OR s.id IN (SELECT space_id FROM uploads WHERE id=$4 AND account_id=$1)
+                OR s.id IN (SELECT e.space_id FROM elements e JOIN uploads u ON e.id=u.parent_id OR e.id=u.replace_file_id
+                    WHERE u.id=$4 AND u.account_id=$1)
+            ORDER BY s.id
+            """, r => r.GetGuid(0), account.Id, elementId, folderId, uploadId, rootSpace);
+
+        while (true)
+        {
+            var spaces = await Resolve();
+            await transaction.SaveAsync("storage_spaces", cancellation);
+            var locked = await Query($"SELECT id FROM spaces WHERE id=ANY($1) ORDER BY id FOR {(moving ? "NO KEY UPDATE" : "SHARE")}",
+                r => r.GetGuid(0), spaces.ToArray());
+            // READ COMMITTED takes a fresh snapshot here: an element/upload may have changed
+            // spaces while we waited. Release this attempt before retrying in stable order.
+            if (locked.SequenceEqual(await Resolve()))
+            {
+                await transaction.ReleaseAsync("storage_spaces", cancellation);
+                return;
+            }
+            await transaction.RollbackAsync("storage_spaces", cancellation);
+            await transaction.ReleaseAsync("storage_spaces", cancellation);
+        }
+    }
 
     /// <summary>Space of a visible folder, or the selected root (personal by default). An explicit space must match the folder.</summary>
     private async Task<Guid> Destination(Account account, Guid? folderId, string? space = null, bool writable = true)
@@ -261,7 +307,11 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
         return access.Space;
     }
 
-    private async Task<Element> Get(Guid id) => (await Query($"SELECT {ElementColumns} WHERE e.id=$1", ReadElement, id)).Single();
+    private async Task<Element> Get(Guid id) => (await Query($"""
+        SELECT {ElementColumns}
+        FROM elements e JOIN spaces s ON s.id=e.space_id LEFT JOIN accounts a ON a.id=e.added_by
+        WHERE e.id=$1
+        """, ReadElement, id)).Single();
 
     /// <summary>"keep both" name: photo.jpg, then photo (1).jpg, photo (2).jpg…</summary>
     private static string Numbered(string name, int number)

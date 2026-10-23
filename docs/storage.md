@@ -293,8 +293,20 @@ dossiers précèdent toujours les fichiers.
    manquantes ou de taille incorrecte, par lots d’au plus 1 000 parties. Répéter
    jusqu’à recevoir une liste vide.
 4. Confirmer avec `POST /uploads/{id}/complete`. L’API vérifie les parties,
-   assemble l’objet puis vérifie que sa taille égale la taille déclarée. Le fichier
-   n’apparaît qu’après cette confirmation.
+   assemble l’objet puis vérifie que sa taille égale la taille déclarée. Elle le
+   copie côté S3 vers une nouvelle clé privée, en conditionnant la copie à l’ETag
+   du contenu validé (chaque partie pour une copie multipart). Le fichier
+   n’apparaît qu’après le commit PostgreSQL de cette confirmation.
+
+Une URL d’envoi ne donne jamais accès en écriture à la clé définitive. Rejouer
+un PUT après confirmation, même après retrait du partage et avec une taille
+différente, ne touche qu’à l’objet temporaire. Si son contenu change entre la
+vérification et la copie, S3 refuse la précondition : l’API répond
+`409 source_changed` sans publier de fichier. Renvoyer le contenu puis confirmer
+de nouveau. Une panne de publication ou de commit laisse aussi l’envoi reprenable,
+y compris lorsque ses parties multipart ont déjà été assemblées. Aucun octet
+ne transite par l’API ; les limites de copie S3 configurées s’appliquent aussi
+à cette publication. Prévoir les coûts de copie et l’espace temporaire associé.
 
 Shelf n’impose aucune limite applicative de taille ni quota ; les limites du
 fournisseur S3 restent applicables. Les URL ne dépassent jamais l’expiration
@@ -366,8 +378,9 @@ La purge anticipée, le vidage et l’expiration suppriment les métadonnées et
 inscrivent les clés S3 à supprimer **dans la même transaction PostgreSQL**, par
 des déclencheurs de suppression. Les envois en cours dont le dossier est purgé
 sont conservés jusqu’à leur expiration pour annuler aussi leurs parties S3.
-La confirmation d’un envoi transfère sa
-clé au fichier avant de supprimer l’envoi : elle ne programme pas sa suppression.
+La confirmation référence une nouvelle clé définitive puis supprime l’envoi :
+le déclencheur programme uniquement la suppression de sa clé temporaire.
+Les objets temporaires restent sous `files/`, couverts par la même réconciliation.
 
 Une tâche hébergée dans chaque serveur HTTP vérifie l’expiration toutes les
 secondes puis traite jusqu’à 100 suppressions S3. Plusieurs serveurs se
@@ -388,8 +401,12 @@ la même file persistante. Le balayage traite au plus une page de 1 000 clés pa
 seconde, recommence une minute après la fin et repart du début au redémarrage.
 Une panne de liste produit `object_reconciliation_retry`, sans empêcher le
 traitement de la file existante. Le préfixe `files/` est réservé à Shelf : toute
-écriture doit réserver sa clé en base avant d’envoyer les octets ; la confirmation
-transfère cette référence au fichier dans une transaction unique.
+écriture cliente doit réserver sa clé en base avant d’envoyer les octets.
+Les publications côté serveur (confirmation, copie et miniature) protègent leurs
+objets par le verrou partagé de publication jusqu’au commit ou rollback ; le
+balayage attend ce verrou avant de prendre l’instantané des références.
+Après un échec de commit ou un redémarrage, les clés définitives sans référence
+rejoignent la file persistante ; les envois encore en cours restent protégés.
 
 Le bucket doit rester sans versionnement, comme indiqué dans le guide
 d’exploitation. Les miniatures rejoignent la même file de suppression persistante ;
@@ -468,7 +485,7 @@ selon RFC 5987). Les requêtes partielles (`Range`) sont prises en charge par le
 | 409 | `size_mismatch` | Taille de l’objet différente de la déclaration ; renvoyer le contenu puis confirmer de nouveau |
 | 409 | `name_conflict` | Un élément du même nom, sans tenir compte de la casse, existe déjà dans le dossier |
 | 409 | `folder_cycle` | Déplacement d’un dossier dans lui-même ou un de ses descendants |
-| 409 | `source_changed` | Taille de la source incohérente ou contenu modifié pendant la copie ; réessayer après stabilisation |
+| 409 | `source_changed` | Taille de la source incohérente pendant une copie ou contenu modifié pendant une copie/confirmation ; renvoyer le contenu si nécessaire et réessayer après stabilisation |
 | 503 | `database_unavailable`, `storage_unavailable` | PostgreSQL ou S3 indisponible |
 
 Un élément d’un autre espace personnel sans partage couvrant cet élément répond

@@ -110,6 +110,7 @@ public sealed class MultipartUploadTests : TestInstance
         var kept = await Declare(member, "kept.jpg", 10);
         await Put(kept, Video[..10]);
         Assert.Equal(HttpStatusCode.Created, (await Confirm(member, kept)).StatusCode);
+        await Eventually(async () => (await Objects()).Length == 1); // Confirmed upload's temporary key is deleted asynchronously.
         var keptObjects = await Objects();
         var large = await Declare(member, "holiday.mp4", Video.Length, "video/mp4");
         await Put(large, Video, 1);

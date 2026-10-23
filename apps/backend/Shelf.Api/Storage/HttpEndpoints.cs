@@ -26,9 +26,15 @@ public static class HttpEndpoints
             try
             {
                 await using var connection = await http.RequestServices.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync(http.RequestAborted);
+                // Commit activity before the long operation, without the account advisory lock.
+                await using (var activity = await connection.BeginTransactionAsync(http.RequestAborted))
+                {
+                    await new AuthTransaction(connection, activity, clock, http.RequestAborted).Authenticate(http.Request.Headers.Authorization, admin: false, accountMutation: false);
+                    await activity.CommitAsync(http.RequestAborted);
+                }
                 await using var transaction = await connection.BeginTransactionAsync(http.RequestAborted);
-                // Storage authenticates in its own transaction, without the account operations' advisory lock.
-                var actor = await new AuthTransaction(connection, transaction, clock, http.RequestAborted).Authenticate(http.Request.Headers.Authorization, admin: false, accountMutation: false);
+                // Revalidate access and protect it through commit; activity must not hold an exclusive lock here.
+                var actor = await new AuthTransaction(connection, transaction, clock, http.RequestAborted).Authenticate(http.Request.Headers.Authorization, admin: false, accountMutation: false, updateActivity: false);
                 http.Items[typeof(Account)] = actor.Account;
                 http.Items[typeof(StorageTransaction)] = new StorageTransaction(connection, transaction, store, clock, http.RequestAborted);
                 var result = await next(context);
@@ -65,7 +71,8 @@ public static class HttpEndpoints
         api.MapPost("/uploads", async (UploadRequest input, HttpContext h) => Results.Json(await Db(h).Declare(Current(h), input), statusCode: 201)).Produces<UploadTicket>(201).WithSummary("Declare an upload")
             .WithDescription("Requires write access to the destination. To replace a specific writable file, including a shared file with a hidden parent, send replaceFileId, size and contentType without name, parentId, space or onConflict. Old content goes to the owner's trash at confirmation.");
         api.MapPost("/uploads/{id:guid}/complete", async (Guid id, HttpContext h) => Results.Json(await Db(h).Complete(Current(h), id), statusCode: 201)).Produces<Element>(201).WithSummary("Complete an upload")
-            .WithDescription("Rechecks write access and uploaded size before publishing. A targeted replacement preserves file identity and shares; revoked, read-only or trashed targets cannot be replaced.");
+            .WithDescription("Rechecks write access and uploaded size, then conditionally copies the validated object to a private final key. Replaying an upload URL cannot modify confirmed content. A concurrent content change returns 409 source_changed; resend and retry confirmation. A targeted replacement preserves file identity and shares; revoked, read-only or trashed targets cannot be replaced.")
+            .Produces(409);
         api.MapGet("/files/{id:guid}/download", async (Guid id, HttpContext h) => Results.Ok(await Db(h).Download(Current(h), id))).Produces<SignedUrl>().WithSummary("Get a download link");
         api.MapGet("/files/{id:guid}/thumbnail", async (Guid id, HttpContext h) => Results.Ok(await Db(h).Thumbnail(Current(h), id))).Produces<ThumbnailResult>().WithSummary("Get a miniature state and link")
             .WithDescription("Uses the file's read access. Link is null while pending or unavailable; generation failure never prevents downloading the file.");
