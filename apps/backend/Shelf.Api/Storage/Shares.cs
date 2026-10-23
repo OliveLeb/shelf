@@ -83,16 +83,16 @@ public sealed partial class StorageTransaction
             """, r => new Share(r.GetGuid(0), new AccountSummary(r.GetGuid(1), r.GetString(2)), r.GetString(3)), id);
     }
 
-    public Task<List<SharedElement>> ReceivedShares(Account account) => Query("""
-        SELECT e.id, e.kind, e.name, e.parent_id, e.size, e.content_type, e.added_at, a.id, a.username,
+    public Task<List<SharedElement>> ReceivedShares(Account account) => Query($"""
+        SELECT {ElementColumns},
             owner.id, owner.username, CASE WHEN EXISTS (
                 WITH RECURSIVE ancestors(id, parent_id) AS (
                     SELECT e.id, e.parent_id
                     UNION ALL SELECT p.id, p.parent_id FROM elements p JOIN ancestors a ON p.id=a.parent_id)
                 SELECT 1 FROM shares inherited JOIN ancestors a ON a.id=inherited.element_id
-                WHERE inherited.recipient_id=$1 AND inherited.level='write') THEN 'write' ELSE 'read' END, e.thumbnail_state
+                WHERE inherited.recipient_id=$1 AND inherited.level='write') THEN 'write' ELSE 'read' END
         FROM elements e JOIN spaces s ON s.id=e.space_id LEFT JOIN accounts a ON a.id=e.added_by
         JOIN shares sh ON sh.element_id=e.id JOIN accounts owner ON owner.id=s.owner_id
         WHERE sh.recipient_id=$1 AND e.trash_id IS NULL ORDER BY lower(e.name), e.id
-        """, r => new SharedElement(ReadElement(r), new AccountSummary(r.GetGuid(9), r.GetString(10)), r.GetString(11)), account.Id);
+        """, r => new SharedElement(ReadElement(r), new AccountSummary(r.GetGuid(10), r.GetString(11)), r.GetString(12)), account.Id);
 }

@@ -42,7 +42,7 @@ public sealed class TrashWorker(NpgsqlDataSource source, ObjectStore store, Time
         // the reference snapshot, including confirmations/copies/miniatures on another API replica.
         await using (var gate = new NpgsqlCommand("SELECT pg_advisory_xact_lock($1)", connection, transaction))
         {
-            gate.Parameters.AddWithValue(StorageTransaction.CopyReconciliationLock);
+            gate.Parameters.AddWithValue(StorageTransaction.ObjectPublicationReconciliationLock);
             await gate.ExecuteNonQueryAsync(cancellation);
         }
         // An old signed PUT (including one finishing after URL expiry) can recreate an acknowledged deletion.

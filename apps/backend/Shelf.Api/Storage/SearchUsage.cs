@@ -14,6 +14,7 @@ public sealed partial class StorageTransaction
                 UNION
                 SELECT e.id FROM elements e JOIN shared p ON e.parent_id=p.id WHERE e.trash_id IS NULL)
             SELECT {ElementColumns}
+            FROM elements e JOIN spaces s ON s.id=e.space_id LEFT JOIN accounts a ON a.id=e.added_by
             WHERE e.trash_id IS NULL AND strpos(lower(e.name), lower($2)) > 0
                 AND (s.owner_id=$1 OR s.owner_id IS NULL OR e.id IN (SELECT id FROM shared))
             ORDER BY lower(e.name), e.id
