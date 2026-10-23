@@ -12,7 +12,8 @@ public sealed partial class StorageTransaction
         // S3 objects become visible before the metadata transaction commits. Reconciliation must
         // wait for that commit (or rollback), rather than enqueue these objects as orphans.
         await Run("SELECT pg_advisory_xact_lock_shared($1)", CopyReconciliationLock);
-        await LockSpaces(account, moving: true, elementId: elementId, folderId: input.ParentId);
+        await LockSpaces(account, moving: true, elementId: elementId, folderId: input.ParentId,
+            rootSpace: input.ParentId is null ? input.Space ?? "personal" : null);
         await Access(account, elementId);
         var destination = await Destination(account, input.ParentId, input.Space);
 

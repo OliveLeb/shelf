@@ -77,7 +77,7 @@ public sealed partial class StorageTransaction
 
     public async Task<Element> Restore(Account account, Guid id)
     {
-        await LockSpaces(account, moving: true);
+        await LockSpaces(account, moving: true, elementId: id);
         var entry = await TrashAccess(account, id);
         if (await Scalar("SELECT 1 FROM trash_entries WHERE id=$1 AND deleted_at>$2", id, clock.GetUtcNow().AddDays(-30)) is null)
             throw new StorageError(404, "trash_not_found");
@@ -98,7 +98,7 @@ public sealed partial class StorageTransaction
 
     public async Task Purge(Account account, Guid id)
     {
-        await LockSpaces(account, moving: true);
+        await LockSpaces(account, moving: true, elementId: id);
         await TrashAccess(account, id);
         // Cascades remove the entire snapshot; database triggers enqueue every object in this transaction.
         await Run("DELETE FROM trash_entries WHERE id=$1", id);
@@ -106,7 +106,7 @@ public sealed partial class StorageTransaction
 
     public async Task EmptyTrash(Account account, string space)
     {
-        await LockSpaces(account, moving: true);
+        await LockSpaces(account, moving: true, rootSpace: space);
         var spaceId = await Destination(account, null, space);
         await Run("DELETE FROM trash_entries WHERE space_id=$1", spaceId);
     }

@@ -26,7 +26,7 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
     public async Task<Element> CreateFolder(Account account, FolderRequest input)
     {
         var name = Name(input.Name);
-        await LockSpaces(account, folderId: input.ParentId);
+        await LockSpaces(account, folderId: input.ParentId, rootSpace: input.ParentId is null ? input.Space ?? "personal" : null);
         var space = await Destination(account, input.ParentId, input.Space);
         var id = Guid.NewGuid();
         await Run("INSERT INTO elements (id, space_id, parent_id, kind, name, added_at, added_by) VALUES ($1,$2,$3,'folder',$4,$5,$6)",
@@ -48,7 +48,8 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
         if (input.Size is not >= 0) throw new StorageError(400, "invalid_size");
         var contentType = ContentType(input.ContentType);
         if (input.OnConflict is not (null or "keepBoth" or "replace")) throw new StorageError(400, "invalid_conflict_policy");
-        await LockSpaces(account, elementId: input.ReplaceFileId, folderId: input.ParentId);
+        await LockSpaces(account, elementId: input.ReplaceFileId, folderId: input.ParentId,
+            rootSpace: input.ReplaceFileId is null && input.ParentId is null ? input.Space ?? "personal" : null);
         string name;
         Guid space;
         if (input.ReplaceFileId is Guid fileId)
@@ -215,7 +216,8 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
     /// <summary>Moving changes metadata only; the S3 object key does not depend on the folder.</summary>
     public async Task<Element> Move(Account account, Guid elementId, MoveRequest input)
     {
-        await LockSpaces(account, moving: true, elementId: elementId, folderId: input.ParentId);
+        await LockSpaces(account, moving: true, elementId: elementId, folderId: input.ParentId,
+            rootSpace: input.ParentId is null ? input.Space ?? "source" : null);
         var access = await Access(account, elementId);
         await RequireMutableSubtree(account, elementId, access);
         var space = access.Space;
@@ -248,15 +250,42 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
         return await Get(elementId);
     }
 
-    /// <summary>Writes share locks; moves exclude writes so a subtree cannot gain children during transfer.
-    /// Lock personal, common and operation-specific spaces in UUID order, including another owner's shared space.
-    /// NO KEY UPDATE lets foreign key checks proceed, and concurrent ordinary writes remain possible.</summary>
-    private Task LockSpaces(Account account, bool moving = false, Guid? elementId = null, Guid? folderId = null, Guid? uploadId = null) => Run($"""
-        SELECT id FROM spaces WHERE owner_id=$1 OR owner_id IS NULL
-            OR id IN (SELECT space_id FROM elements WHERE id=$2 OR id=$3)
-            OR id IN (SELECT space_id FROM uploads WHERE id=$4 AND account_id=$1)
-        ORDER BY id FOR {(moving ? "NO KEY UPDATE" : "SHARE")}
-        """, account.Id, elementId, folderId, uploadId);
+    /// <summary>Lock only affected spaces, in PostgreSQL UUID order. Ordinary writes share locks;
+    /// moves exclude writes so a subtree cannot gain children during transfer. NO KEY UPDATE
+    /// still permits foreign key checks. A "source" root preserves a common source's space on move.</summary>
+    private async Task LockSpaces(Account account, bool moving = false, Guid? elementId = null, Guid? folderId = null,
+        Guid? uploadId = null, string? rootSpace = null)
+    {
+        Task<List<Guid>> Resolve() => Query("""
+            SELECT s.id FROM spaces s WHERE
+                (s.owner_id=$1 AND ($5='personal' OR ($5='source' AND NOT EXISTS (
+                    SELECT 1 FROM elements e JOIN spaces source ON source.id=e.space_id
+                    WHERE e.id=$2 AND source.owner_id IS NULL))))
+                OR (s.owner_id IS NULL AND $5='common')
+                OR s.id IN (SELECT space_id FROM elements WHERE id=$2 OR id=$3)
+                OR s.id IN (SELECT space_id FROM uploads WHERE id=$4 AND account_id=$1)
+                OR s.id IN (SELECT e.space_id FROM elements e JOIN uploads u ON e.id=u.parent_id OR e.id=u.replace_file_id
+                    WHERE u.id=$4 AND u.account_id=$1)
+            ORDER BY s.id
+            """, r => r.GetGuid(0), account.Id, elementId, folderId, uploadId, rootSpace);
+
+        while (true)
+        {
+            var spaces = await Resolve();
+            await transaction.SaveAsync("storage_spaces", cancellation);
+            var locked = await Query($"SELECT id FROM spaces WHERE id=ANY($1) ORDER BY id FOR {(moving ? "NO KEY UPDATE" : "SHARE")}",
+                r => r.GetGuid(0), spaces.ToArray());
+            // READ COMMITTED takes a fresh snapshot here: an element/upload may have changed
+            // spaces while we waited. Release this attempt before retrying in stable order.
+            if (locked.SequenceEqual(await Resolve()))
+            {
+                await transaction.ReleaseAsync("storage_spaces", cancellation);
+                return;
+            }
+            await transaction.RollbackAsync("storage_spaces", cancellation);
+            await transaction.ReleaseAsync("storage_spaces", cancellation);
+        }
+    }
 
     /// <summary>Space of a visible folder, or the selected root (personal by default). An explicit space must match the folder.</summary>
     private async Task<Guid> Destination(Account account, Guid? folderId, string? space = null, bool writable = true)
