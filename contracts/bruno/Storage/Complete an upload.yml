@@ -53,5 +53,20 @@ examples:
             "addedBy": "",
             "thumbnailState": ""
           }
+  - name: 409 Response
+    description: Conflict
+    request:
+      url: "{{baseUrl}}/uploads/:id/complete"
+      method: POST
+      params:
+        - name: id
+          value: ""
+          type: path
+    response:
+      status: 409
+      statusText: Conflict
+      body:
+        type: text
+        data: ""
 
-docs: Rechecks write access and uploaded size before publishing. A targeted replacement preserves file identity and shares; revoked, read-only or trashed targets cannot be replaced.
+docs: Rechecks write access and uploaded size, then conditionally copies the validated object to a private final key. Replaying an upload URL cannot modify confirmed content. A concurrent content change returns 409 source_changed; resend and retry confirmation. A targeted replacement preserves file identity and shares; revoked, read-only or trashed targets cannot be replaced.
