@@ -6,10 +6,11 @@ namespace Shelf.Api.Storage;
 /// <summary>Storage operations in one PostgreSQL transaction, without the account advisory lock.</summary>
 public sealed partial class StorageTransaction(NpgsqlConnection connection, NpgsqlTransaction transaction, ObjectStore store, TimeProvider clock, CancellationToken cancellation)
 {
-    private const string ElementColumns = "e.id, e.kind, e.name, e.parent_id, e.size, e.content_type, e.added_at, a.id, a.username FROM elements e JOIN spaces s ON s.id=e.space_id LEFT JOIN accounts a ON a.id=e.added_by";
+    private const string ElementColumns = "e.id, e.kind, e.name, e.parent_id, e.size, e.content_type, e.added_at, a.id, a.username, e.thumbnail_state FROM elements e JOIN spaces s ON s.id=e.space_id LEFT JOIN accounts a ON a.id=e.added_by";
     private static Element ReadElement(NpgsqlDataReader r) => new(r.GetGuid(0), r.GetString(1), r.GetString(2),
         r.IsDBNull(3) ? null : r.GetGuid(3), r.IsDBNull(4) ? null : r.GetInt64(4), r.IsDBNull(5) ? null : r.GetString(5), r.GetFieldValue<DateTimeOffset>(6),
-        r.IsDBNull(7) ? null : new AccountSummary(r.GetGuid(7), r.GetString(8)));
+        r.IsDBNull(7) ? null : new AccountSummary(r.GetGuid(7), r.GetString(8)),
+        r.IsDBNull(r.GetOrdinal("thumbnail_state")) ? null : r.GetString(r.GetOrdinal("thumbnail_state")));
     private static readonly Dictionary<string, string> Sorts = new() { ["name"] = "lower(e.name) {0}, e.name {0}", ["addedAt"] = "e.added_at {0}", ["size"] = "e.size {0}" };
 
     /// <summary>Content of a visible folder, or of the selected space's root. Folders come before files.</summary>

@@ -38,7 +38,11 @@ builder.Services.AddOpenApi(options =>
 });
 builder.AddAuthenticationBackend();
 builder.AddStorageBackend();
-if (!command && !generatingContract) builder.Services.AddHostedService<TrashWorker>();
+if (!command && !generatingContract)
+{
+    builder.Services.AddHostedService<TrashWorker>();
+    builder.Services.AddHostedService<ThumbnailWorker>();
+}
 var app = builder.Build();
 if (command)
 {

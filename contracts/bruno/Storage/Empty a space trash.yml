@@ -1,7 +1,7 @@
 info:
   name: Empty a space trash
   type: http
-  seq: 21
+  seq: 23
   tags:
     - Storage
 

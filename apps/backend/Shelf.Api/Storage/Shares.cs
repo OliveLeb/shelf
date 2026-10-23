@@ -90,7 +90,7 @@ public sealed partial class StorageTransaction
                     SELECT e.id, e.parent_id
                     UNION ALL SELECT p.id, p.parent_id FROM elements p JOIN ancestors a ON p.id=a.parent_id)
                 SELECT 1 FROM shares inherited JOIN ancestors a ON a.id=inherited.element_id
-                WHERE inherited.recipient_id=$1 AND inherited.level='write') THEN 'write' ELSE 'read' END
+                WHERE inherited.recipient_id=$1 AND inherited.level='write') THEN 'write' ELSE 'read' END, e.thumbnail_state
         FROM elements e JOIN spaces s ON s.id=e.space_id LEFT JOIN accounts a ON a.id=e.added_by
         JOIN shares sh ON sh.element_id=e.id JOIN accounts owner ON owner.id=s.owner_id
         WHERE sh.recipient_id=$1 AND e.trash_id IS NULL ORDER BY lower(e.name), e.id

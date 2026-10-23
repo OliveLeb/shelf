@@ -12,8 +12,11 @@ public sealed record MoveRequest(Guid? ParentId = null, string? Space = null);
 /// <summary>Copies into a writable folder or a space root (personal by default), recursively and without copying shares. Name conflicts are renamed automatically.</summary>
 public sealed record CopyRequest(Guid? ParentId = null, string? Space = null);
 public sealed record AccountSummary(Guid Id, string Username);
-/// <summary>A file or a folder; Size and ContentType are null for folders.</summary>
-public sealed record Element(Guid Id, string Kind, string Name, Guid? ParentId, long? Size, string? ContentType, DateTimeOffset AddedAt, AccountSummary? AddedBy);
+/// <summary>A file or a folder; Size, ContentType and ThumbnailState are null for folders. ThumbnailState is pending, available or unavailable.</summary>
+public sealed record Element(Guid Id, string Kind, string Name, Guid? ParentId, long? Size, string? ContentType, DateTimeOffset AddedAt, AccountSummary? AddedBy, string? ThumbnailState);
+
+/// <summary>Miniature generation state (pending, available, unavailable); Link is present only when available.</summary>
+public sealed record ThumbnailResult(string State, SignedUrl? Link);
 
 public sealed class StorageError(int status, string code) : Exception(code)
 {

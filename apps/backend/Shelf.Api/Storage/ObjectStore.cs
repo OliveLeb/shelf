@@ -82,6 +82,37 @@ public sealed class ObjectStore : IDisposable
         return new(Sign(request), new DateTimeOffset(expires));
     }
 
+    public SignedUrl SignedInline(string key)
+    {
+        var expires = UrlExpiry(lifetime);
+        var request = new GetPreSignedUrlRequest { BucketName = bucket, Key = key, Verb = HttpVerb.GET, Expires = expires };
+        request.ResponseHeaderOverrides.ContentDisposition = "inline";
+        return new(Sign(request), new DateTimeOffset(expires));
+    }
+
+    /// <summary>Only miniature generation relays bytes through the VPS. Bound temporary disk usage.</summary>
+    public async Task FetchPreviewSource(string key, string path, CancellationToken cancellation)
+    {
+        const long limit = 512L * 1024 * 1024;
+        using var response = await client.GetObjectAsync(bucket, key, cancellation);
+        if (response.ContentLength > limit) throw new InvalidDataException("preview_source_too_large");
+        await using var output = File.Create(path);
+        var buffer = new byte[81920];
+        long total = 0;
+        int read;
+        while ((read = await response.ResponseStream.ReadAsync(buffer, cancellation)) > 0)
+        {
+            total += read;
+            if (total > limit) throw new InvalidDataException("preview_source_too_large");
+            await output.WriteAsync(buffer.AsMemory(0, read), cancellation);
+        }
+    }
+
+    public Task PutThumbnail(string key, string path, CancellationToken cancellation) => client.PutObjectAsync(new PutObjectRequest
+    {
+        BucketName = bucket, Key = key, FilePath = path, ContentType = "image/jpeg"
+    }, cancellation);
+
     private string Sign(GetPreSignedUrlRequest request)
     {
         request.Protocol = protocol;

@@ -10,6 +10,7 @@ déplacement et noms uniques) et [l’issue #8](https://github.com/OliveLeb/shel
 [l’issue #10](https://github.com/OliveLeb/shelf/issues/10) (**corbeille et purge**) et
 [l’issue #12](https://github.com/OliveLeb/shelf/issues/12) (**partages en Écriture**).
 L’[issue #11](https://github.com/OliveLeb/shelf/issues/11) ajoute la **copie indépendante des éléments**.
+L’[issue #13](https://github.com/OliveLeb/shelf/issues/13) ajoute les **miniatures et la lecture vidéo**.
 Le vocabulaire suit [`CONTEXT.md`](../CONTEXT.md).
 
 Le contenu des fichiers vit dans un bucket compatible S3 privé et transite
@@ -73,6 +74,8 @@ JSON avec `Cache-Control: no-store` et signalent les erreurs par
 | `GET /uploads/{id}` | — | 200, même ticket avec uniquement les parties manquantes ou de taille incorrecte |
 | `POST /uploads/{id}/complete` | — | 201, fichier créé |
 | `GET /files/{id}/download` | — | 200, `{url, expiresAt}` |
+| `GET /files/{id}/thumbnail` | — | 200, `{state, link}` ; `link` vaut `{url, expiresAt}` si disponible, sinon `null` |
+| `GET /files/{id}/stream` | — | 200, `{url, expiresAt}` de lecture vidéo inline |
 | `PUT /elements/{id}/shares/{recipientId}` | `level` (`read` ou `write`) | 200, partage créé ou mis à jour |
 | `GET /elements/{id}/shares` | — | 200, partages directs et hérités de l’élément, réservés au propriétaire |
 | `DELETE /elements/{id}/shares/{recipientId}` | — | 204, partage direct retiré |
@@ -86,6 +89,8 @@ JSON avec `Cache-Control: no-store` et signalent les erreurs par
 Un élément contient `id`, `kind` (`file` ou `folder`), `name`, `parentId`
 (`null` à la racine), `size` et `contentType` (`null` pour un dossier), `addedAt`
 et `addedBy` (`{id, username}`, ou `null` si le compte n’existe plus).
+`thumbnailState` indique `pending`, `available` ou `unavailable` pour un fichier,
+et vaut `null` pour un dossier, y compris dans les partages et la corbeille.
 
 ### Recherche et volume occupé
 
@@ -387,7 +392,47 @@ traitement de la file existante. Le préfixe `files/` est réservé à Shelf : t
 transfère cette référence au fichier dans une transaction unique.
 
 Le bucket doit rester sans versionnement, comme indiqué dans le guide
-d’exploitation. Les miniatures seront intégrées au même mécanisme par #13.
+d’exploitation. Les miniatures rejoignent la même file de suppression persistante ;
+le balayage protège aussi les clés `elements.thumbnail_key` encore référencées.
+
+### Miniatures et lecture vidéo
+
+La migration `010_thumbnails` programme une miniature dans la transaction de
+confirmation (et pour les fichiers existants ou copiés). Un worker sur le VPS
+produit un JPEG de 320 × 320 pixels au maximum, proportions conservées, pour
+JPEG, HEIC/HEIF et les vidéos décodables par ffmpeg. La miniature vit sous une
+clé opaque distincte dans le même bucket privé. La vidéo originale n’est jamais
+transcodée : ffmpeg ne fait qu’en extraire une image, en lisant directement le
+S3 avec des requêtes partielles, sans télécharger la vidéo entière sur le VPS.
+
+`GET /files/{id}/thumbnail` renvoie l’état et, seulement si `available`, une URL
+signée courte durée. Cette route et `/stream` appliquent exactement les droits
+de Lecture du fichier : propriétaire, espace commun, partage direct ou hérité.
+Un tiers, administrateur compris, reçoit `404` ; un dossier ou un fichier en
+corbeille aussi. Un retrait de partage interdit les nouvelles URL sans invalider
+celles déjà émises avant leur expiration.
+
+Un type non pris en charge, un fichier corrompu, un outil absent, une panne S3 ou
+le dépassement des limites de génération donne `unavailable`, sans relance
+automatique. Une tentative dure au plus 60 secondes ; une tentative interrompue
+par l’arrêt du serveur devient indisponible après cinq minutes, lors d’un passage
+du worker. Un fichier encore en attente et non commencé reste à traiter après
+redémarrage. Dans tous les cas, le téléchargement reste indépendant et utilisable.
+Les photos sources sont limitées à 512 Mio pour la génération seule (aucune
+limite d’envoi) ; les ressources des décodeurs sont bornées. Voir
+[les prérequis du VPS](../infra/storage.md#miniatures-sur-le-vps).
+
+Un remplacement conserve la miniature disponible de l’ancien contenu dans la
+corbeille et programme une nouvelle génération pour le nouveau contenu. Une copie
+génère sa propre miniature indépendante ; une ancienne génération ne peut jamais
+publier son résultat sur le nouveau contenu. La purge supprime aussi les miniatures,
+y compris après une panne S3, via la même file persistante que les fichiers.
+
+`GET /files/{id}/stream` signe un GET de l’original avec `Content-Disposition:
+inline`. Le lecteur envoie `Range` directement au S3 et reçoit `206` avec
+`Content-Range`. Il peut redemander une URL après expiration. Les conteneurs et
+codecs doivent être pris en charge par le navigateur/appareil : un format non
+lisible reste téléchargeable. Aucune conversion vidéo n’est effectuée.
 
 ### Téléchargement
 
@@ -402,6 +447,7 @@ selon RFC 5987). Les requêtes partielles (`Range`) sont prises en charge par le
 | 400 | `invalid_name` | Nom vide, de plus de 255 caractères, `.`/`..`, avec `/`, `\` ou caractère de contrôle |
 | 400 | `invalid_size` | Taille absente ou négative |
 | 400 | `invalid_content_type` | Type de contenu invalide |
+| 400 | `not_video` | Route de streaming demandée pour un fichier dont le type n’est pas `video/*` |
 | 400 | `invalid_conflict_policy` | `onConflict` autre que `keepBoth` ou `replace` |
 | 400 | `invalid_upload_destination` | `replaceFileId` combiné avec `name`, `parentId`, `space` ou `onConflict` |
 | 400 | `invalid_share_level` | Niveau autre que `read` ou `write` (y compris absent) |
@@ -431,7 +477,6 @@ accès au contenu.
 
 ## Limites actuelles
 
-Les miniatures restent livrées par les autres sous-issues de #3.
 Le cycle de vie des comptes est vérifié par l’[issue #15](https://github.com/OliveLeb/shelf/issues/15) :
 la suppression purge l’espace personnel et sa corbeille via la file persistante,
 retire les partages et anonymise les auteurs du contenu conservé ; la désactivation

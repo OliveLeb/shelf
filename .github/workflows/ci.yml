@@ -62,6 +62,13 @@ jobs:
         if: steps.scope.outputs.backend == 'true'
         run: dotnet restore apps/backend/Shelf.slnx --locked-mode
 
+      - name: Install miniature decoders
+        if: steps.scope.outputs.backend == 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes --no-install-recommends ffmpeg imagemagick libheif1 libheif-plugin-libde265
+          convert -list format | grep -E 'HEIC.*r'
+
       - name: Build once in Release
         if: steps.scope.outputs.backend == 'true'
         run: dotnet build apps/backend/Shelf.slnx --configuration Release --no-restore

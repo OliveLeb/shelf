@@ -44,7 +44,8 @@ examples:
                 "size": "",
                 "contentType": "",
                 "addedAt": "",
-                "addedBy": ""
+                "addedBy": "",
+                "thumbnailState": ""
               },
               "owner": {
                 "id": "",

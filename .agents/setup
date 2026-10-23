@@ -19,6 +19,12 @@ else
   step "postgresql already installed"
 fi
 
+if ! dpkg -s ffmpeg imagemagick libheif1 >/dev/null 2>&1; then
+  step "installing miniature decoders (JPEG, HEIC and video)"
+  $SUDO apt-get update -qq
+  $SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ffmpeg imagemagick libheif1
+fi
+
 PG_VERSION="$($SUDO ls /etc/postgresql | head -n1)"
 PG_CONF="/etc/postgresql/$PG_VERSION/main"
 

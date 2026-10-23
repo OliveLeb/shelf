@@ -53,7 +53,8 @@ examples:
               "size": "",
               "contentType": "",
               "addedAt": "",
-              "addedBy": ""
+              "addedBy": "",
+              "thumbnailState": ""
             }
           ]
   - name: 400 Response

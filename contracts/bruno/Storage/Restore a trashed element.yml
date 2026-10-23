@@ -1,7 +1,7 @@
 info:
   name: Restore a trashed element
   type: http
-  seq: 22
+  seq: 24
   tags:
     - Storage
 
@@ -50,5 +50,6 @@ examples:
             "size": "",
             "contentType": "",
             "addedAt": "",
-            "addedBy": ""
+            "addedBy": "",
+            "thumbnailState": ""
           }
