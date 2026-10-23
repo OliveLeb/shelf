@@ -1,0 +1,14 @@
+# Daily Shelf PostgreSQL backup, started by shelf-pg-backup.timer (see infra/storage.md).
+[Unit]
+Description=Shelf PostgreSQL backup to S3
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/shelf/backup.env
+ExecStart=/usr/local/bin/shelf-pg-backup
+TimeoutStartSec=1h
+# Implies a private /tmp, a read-only system and no privilege escalation.
+DynamicUser=yes
+ProtectHome=yes

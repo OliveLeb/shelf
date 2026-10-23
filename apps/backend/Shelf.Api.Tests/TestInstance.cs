@@ -3,6 +3,8 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Amazon.S3;
+using Amazon.S3.Model;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
@@ -29,9 +31,15 @@ public abstract class TestInstance : IAsyncLifetime
     protected HttpClient Admin = null!;
     protected Guid AdminId;
     protected readonly CapturedLogs Logs = new();
+    // Signed URLs point straight at the S3 service, outside the test host.
+    protected static readonly HttpClient Transfer = new();
+    protected static readonly string S3SecretKey = Environment.GetEnvironmentVariable("SHELF_TEST_S3_SECRET_KEY") ?? "change-me-local-only";
+    protected AmazonS3Client S3 = null!;
+    protected readonly string Bucket = "shelf-test-" + Guid.NewGuid().ToString("N");
     private readonly string databaseName = "shelf_test_" + Guid.NewGuid().ToString("N");
     private string connectionString = "";
     private string adminConnection = "";
+    private Func<WebApplicationFactory<Program>> createApp = null!;
 
     public async Task InitializeAsync()
     {
@@ -48,17 +56,42 @@ public abstract class TestInstance : IAsyncLifetime
         var bootstrap = await Cli(Password, "admin", "create", "owner", "owner@example.test");
         Assert.Equal(0, bootstrap.Code);
         AdminId = Guid.Parse(bootstrap.Output.Trim());
-        App = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        var s3Endpoint = Environment.GetEnvironmentVariable("SHELF_TEST_S3_ENDPOINT") ?? "http://localhost:9000";
+        var s3AccessKey = Environment.GetEnvironmentVariable("SHELF_TEST_S3_ACCESS_KEY") ?? "shelf";
+        S3 = new AmazonS3Client(s3AccessKey, S3SecretKey, new AmazonS3Config { ServiceURL = s3Endpoint, ForcePathStyle = true, AuthenticationRegion = "us-east-1" });
+        await S3.PutBucketAsync(Bucket);
+        createApp = () => new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
             builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["ConnectionStrings:Shelf"] = connectionString,
                 ["Authentication:ClientOrigin"] = "https://shelf.example.test",
-                ["Authentication:PublicPermitLimit"] = "1000"
+                ["Authentication:PublicPermitLimit"] = "1000",
+                ["Storage:S3:Endpoint"] = s3Endpoint,
+                ["Storage:S3:Region"] = "us-east-1",
+                ["Storage:S3:Bucket"] = Bucket,
+                ["Storage:S3:AccessKey"] = s3AccessKey,
+                ["Storage:S3:SecretKey"] = S3SecretKey,
+                ["Storage:S3:ForcePathStyle"] = "true",
+                // The S3 minimum part size, so a few MiB exercise multipart uploads.
+                ["Storage:PartSizeMiB"] = "5",
+                ["Storage:UploadCleanupSeconds"] = "0.1"
             }));
             builder.ConfigureServices(services => services.AddSingleton<TimeProvider>(Clock));
             builder.ConfigureLogging(logging => logging.ClearProviders().AddProvider(Logs));
         });
+        App = createApp();
+        Client = App.CreateClient();
+        Admin = await SignIn("owner");
+    }
+
+    protected async Task RestartApp(Action<IWebHostBuilder>? configure = null)
+    {
+        Admin.Dispose();
+        Client.Dispose();
+        await App.DisposeAsync();
+        App = createApp();
+        if (configure is not null) App = App.WithWebHostBuilder(configure);
         Client = App.CreateClient();
         Admin = await SignIn("owner");
     }
@@ -77,6 +110,14 @@ public abstract class TestInstance : IAsyncLifetime
         process.StandardInput.Close();
         await process.WaitForExitAsync();
         return (process.ExitCode, await output, await error);
+    }
+    protected async Task Sql(string sql, params object[] values)
+    {
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(sql, connection);
+        foreach (var value in values) command.Parameters.AddWithValue(value);
+        await command.ExecuteNonQueryAsync();
     }
     protected async Task<HttpClient> SignIn(string identifier, string password = Password, string device = "test-device")
     {
@@ -109,16 +150,77 @@ public abstract class TestInstance : IAsyncLifetime
         var id = (await Json(response)).GetProperty("id").GetGuid();
         return (id, await SignIn(username));
     }
+    protected static readonly byte[] Photo = "not really a jpeg, but bytes all the same"u8.ToArray();
+    protected static async Task<JsonElement> Declare(HttpClient client, string name, long size, string contentType = "image/jpeg", Guid? parentId = null, string? onConflict = null)
+    {
+        var response = await client.PostAsJsonAsync("/uploads", new { name, size, contentType, parentId, onConflict });
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        return await Json(response);
+    }
+    /// <summary>Sends each part listed by an upload ticket (or only the given part numbers) with its slice of the content.</summary>
+    protected static async Task<HttpResponseMessage> Put(JsonElement upload, byte[] content, params int[] only)
+    {
+        HttpResponseMessage response = null!;
+        var partSize = upload.GetProperty("partSize").GetInt64();
+        foreach (var part in upload.GetProperty("parts").EnumerateArray())
+        {
+            var number = part.GetProperty("number").GetInt32();
+            if (only.Length > 0 && !only.Contains(number)) continue;
+            var start = (int)Math.Min((number - 1) * partSize, content.Length);
+            var end = (int)Math.Min(start + partSize, content.Length);
+            var request = new HttpRequestMessage(HttpMethod.Put, part.GetProperty("url").GetString()) { Content = new ByteArrayContent(content[start..end]) };
+            foreach (var header in upload.GetProperty("headers").EnumerateObject()) request.Content.Headers.TryAddWithoutValidation(header.Name, header.Value.GetString());
+            response = await Transfer.SendAsync(request);
+            Assert.True(response.IsSuccessStatusCode, $"Part {number}: HTTP {(int)response.StatusCode} {await response.Content.ReadAsStringAsync()}");
+        }
+        return response;
+    }
+    protected static Task<HttpResponseMessage> Confirm(HttpClient client, JsonElement upload) => client.PostAsync($"/uploads/{upload.GetProperty("id").GetGuid()}/complete", null);
+    protected static async Task<JsonElement> Upload(HttpClient client, string name, Guid? parentId = null, byte[]? content = null, string? onConflict = null)
+    {
+        content ??= Photo;
+        var upload = await Declare(client, name, content.Length, parentId: parentId, onConflict: onConflict);
+        await Put(upload, content);
+        return await Json(await Confirm(client, upload));
+    }
+    protected static async Task<JsonElement[]> Root(HttpClient client) => [.. (await Json(await client.GetAsync("/spaces/personal/elements"))).EnumerateArray()];
+    protected static Guid Id(JsonElement element) => element.GetProperty("id").GetGuid();
+    protected static async Task<string?> Error(HttpResponseMessage response) => (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString();
+
     public async Task DisposeAsync()
     {
         Admin?.Dispose();
         Client?.Dispose();
         if (App is not null) await App.DisposeAsync();
-        NpgsqlConnection.ClearAllPools();
-        await using var connection = new NpgsqlConnection(adminConnection);
-        await connection.OpenAsync();
-        await using var command = new NpgsqlCommand($"DROP DATABASE IF EXISTS {databaseName} WITH (FORCE)", connection);
-        await command.ExecuteNonQueryAsync();
+        try
+        {
+            if (S3 is not null) await DeleteBucket();
+        }
+        finally
+        {
+            NpgsqlConnection.ClearAllPools();
+            await using var connection = new NpgsqlConnection(adminConnection);
+            await connection.OpenAsync();
+            await using var command = new NpgsqlCommand($"DROP DATABASE IF EXISTS {databaseName} WITH (FORCE)", connection);
+            await command.ExecuteNonQueryAsync();
+        }
+    }
+    private async Task DeleteBucket()
+    {
+        using (S3)
+        {
+            foreach (var upload in (await S3.ListMultipartUploadsAsync(Bucket)).MultipartUploads ?? [])
+                await S3.AbortMultipartUploadAsync(Bucket, upload.Key, upload.UploadId);
+            var listing = new ListObjectsV2Request { BucketName = Bucket };
+            ListObjectsV2Response page;
+            do
+            {
+                page = await S3.ListObjectsV2Async(listing);
+                foreach (var item in page.S3Objects ?? []) await S3.DeleteObjectAsync(Bucket, item.Key);
+                listing.ContinuationToken = page.NextContinuationToken;
+            } while (page.IsTruncated == true);
+            await S3.DeleteBucketAsync(Bucket);
+        }
     }
 }
 

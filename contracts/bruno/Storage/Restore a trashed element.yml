@@ -1,0 +1,55 @@
+info:
+  name: Restore a trashed element
+  type: http
+  seq: 24
+  tags:
+    - Storage
+
+http:
+  method: POST
+  url: "{{baseUrl}}/trash/:id/restore"
+  params:
+    - name: id
+      value: ""
+      type: path
+  auth:
+    type: bearer
+    token: "{{token}}"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+examples:
+  - name: 200 Response
+    description: OK
+    request:
+      url: "{{baseUrl}}/trash/:id/restore"
+      method: POST
+      params:
+        - name: id
+          value: ""
+          type: path
+    response:
+      status: 200
+      statusText: OK
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "id": "",
+            "kind": "",
+            "name": "",
+            "parentId": "",
+            "size": "",
+            "contentType": "",
+            "addedAt": "",
+            "addedBy": "",
+            "thumbnailState": ""
+          }

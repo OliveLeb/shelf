@@ -52,7 +52,12 @@ public sealed partial class AuthTransaction
         await InsertAccount(account);
         return account;
     }
-    private Task<int> InsertAccount(Account account) => Run("INSERT INTO accounts VALUES ($1,$2,$3,$4,$5,$6)", account.Id, account.Username, account.Email, account.PasswordHash, account.IsAdmin, account.IsActive);
+    private async Task InsertAccount(Account account)
+    {
+        await Run("INSERT INTO accounts VALUES ($1,$2,$3,$4,$5,$6)", account.Id, account.Username, account.Email, account.PasswordHash, account.IsAdmin, account.IsActive);
+        // Every account owns exactly one personal space (storage module).
+        await Run("INSERT INTO spaces (id, owner_id) VALUES ($1,$2)", Guid.NewGuid(), account.Id);
+    }
     public async Task SetAdmin(Guid id, bool admin)
     {
         var account = await AccountById(id);

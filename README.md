@@ -8,7 +8,7 @@ Application de stockage de photos, vidéos et fichiers.
 - `apps/web/` : future application web, technologie à choisir.
 - `apps/mobile/` : future application mobile, technologie à choisir.
 - `contracts/` : contrat OpenAPI généré et collection Bruno.
-- `compose.yaml` : PostgreSQL pour le développement local.
+- `compose.yaml` : PostgreSQL et MinIO (S3) pour le développement local.
 - `infra/` : documentation des services et du déploiement.
 - `docs/` : documentation du projet et décisions techniques.
 
@@ -22,7 +22,7 @@ Préparer la base PostgreSQL :
 
 ```sh
 cp .env.example .env
-docker compose up -d --wait postgres
+docker compose up -d --wait postgres minio
 ```
 
 Les données sont conservées dans un volume Docker. Voir [la documentation
@@ -35,6 +35,7 @@ dotnet restore apps/backend/Shelf.slnx
 dotnet build apps/backend/Shelf.slnx --no-restore
 export ConnectionStrings__Shelf='Host=localhost;Database=shelf;Username=shelf'
 export Authentication__ClientOrigin='http://localhost:3000'
+# Configuration S3 (Storage__S3__*) : voir infra/README.md.
 dotnet run --project apps/backend/Shelf.Api --no-launch-profile -- migrate
 dotnet run --project apps/backend/Shelf.Api --no-launch-profile -- admin create owner owner@example.test
 dotnet run --project apps/backend/Shelf.Api --launch-profile http
@@ -45,7 +46,8 @@ Vérification : `curl --fail http://localhost:5050/health`.
 
 Le backend fournit la santé, l’authentification web/mobile et la gestion des
 comptes sur invitation. Voir [le contrat et les commandes](docs/authentication.md).
-Le stockage et les applications clientes restent à implémenter.
+Le stockage des fichiers est en cours : envoi et téléchargement dans l'espace
+personnel, voir [son contrat](docs/storage.md). Les applications clientes restent à implémenter.
 Ne pas ajouter de fichiers personnels ni de secrets au dépôt.
 
 ## Intégration continue

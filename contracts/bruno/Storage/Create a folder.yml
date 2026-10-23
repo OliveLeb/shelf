@@ -1,0 +1,63 @@
+info:
+  name: Create a folder
+  type: http
+  seq: 17
+  tags:
+    - Storage
+
+http:
+  method: POST
+  url: "{{baseUrl}}/folders"
+  body:
+    type: json
+    data: |-
+      {
+        "name": "",
+        "parentId": "",
+        "space": ""
+      }
+  auth:
+    type: bearer
+    token: "{{token}}"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+examples:
+  - name: 201 Response
+    description: Created
+    request:
+      url: "{{baseUrl}}/folders"
+      method: POST
+      body:
+        type: json
+        data: |-
+          {
+            "name": "",
+            "parentId": "",
+            "space": ""
+          }
+    response:
+      status: 201
+      statusText: Created
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "id": "",
+            "kind": "",
+            "name": "",
+            "parentId": "",
+            "size": "",
+            "contentType": "",
+            "addedAt": "",
+            "addedBy": "",
+            "thumbnailState": ""
+          }

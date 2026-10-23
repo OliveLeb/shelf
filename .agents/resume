@@ -2,10 +2,16 @@
 set -euo pipefail
 
 # Fast, idempotent work after orb activation and on every wake (10s budget):
-# just make sure PostgreSQL is up.
+# make sure PostgreSQL and MinIO are up.
 
 PG_VERSION="$(ls /etc/postgresql | head -n1)"
 if ! pg_isready -q -h 127.0.0.1 -p 5432; then
   echo "[shelf-resume] starting PostgreSQL $PG_VERSION"
   sudo pg_ctlcluster "$PG_VERSION" main start
+fi
+
+# MinIO (S3-compatible storage for development and integration tests).
+if ! curl -fs -o /dev/null http://127.0.0.1:9000/minio/health/live; then
+  echo "[shelf-resume] starting MinIO"
+  amp orb services ensure || echo "[shelf-resume] MinIO did not start; run: amp orb services ensure"
 fi

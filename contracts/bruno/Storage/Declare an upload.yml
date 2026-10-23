@@ -1,0 +1,75 @@
+info:
+  name: Declare an upload
+  type: http
+  seq: 11
+  tags:
+    - Storage
+
+http:
+  method: POST
+  url: "{{baseUrl}}/uploads"
+  body:
+    type: json
+    data: |-
+      {
+        "name": "",
+        "size": "",
+        "contentType": "",
+        "parentId": "",
+        "onConflict": "",
+        "space": "",
+        "replaceFileId": ""
+      }
+  auth:
+    type: bearer
+    token: "{{token}}"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+examples:
+  - name: 201 Response
+    description: Created
+    request:
+      url: "{{baseUrl}}/uploads"
+      method: POST
+      body:
+        type: json
+        data: |-
+          {
+            "name": "",
+            "size": "",
+            "contentType": "",
+            "parentId": "",
+            "onConflict": "",
+            "space": "",
+            "replaceFileId": ""
+          }
+    response:
+      status: 201
+      statusText: Created
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "id": "",
+            "method": "",
+            "headers": {},
+            "partSize": "",
+            "parts": [
+              {
+                "number": "",
+                "url": ""
+              }
+            ],
+            "expiresAt": ""
+          }
+
+docs: Requires write access to the destination. To replace a specific writable file, including a shared file with a hidden parent, send replaceFileId, size and contentType without name, parentId, space or onConflict. Old content goes to the owner's trash at confirmation.

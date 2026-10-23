@@ -1,0 +1,69 @@
+info:
+  name: Copy an element
+  type: http
+  seq: 20
+  tags:
+    - Storage
+
+http:
+  method: POST
+  url: "{{baseUrl}}/elements/:id/copy"
+  params:
+    - name: id
+      value: ""
+      type: path
+  body:
+    type: json
+    data: |-
+      {
+        "parentId": "",
+        "space": ""
+      }
+  auth:
+    type: bearer
+    token: "{{token}}"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+examples:
+  - name: 201 Response
+    description: Created
+    request:
+      url: "{{baseUrl}}/elements/:id/copy"
+      method: POST
+      params:
+        - name: id
+          value: ""
+          type: path
+      body:
+        type: json
+        data: |-
+          {
+            "parentId": "",
+            "space": ""
+          }
+    response:
+      status: 201
+      statusText: Created
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "id": "",
+            "kind": "",
+            "name": "",
+            "parentId": "",
+            "size": "",
+            "contentType": "",
+            "addedAt": "",
+            "addedBy": "",
+            "thumbnailState": ""
+          }
