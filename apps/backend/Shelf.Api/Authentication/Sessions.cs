@@ -15,8 +15,9 @@ public sealed partial class AuthTransaction
         await Run("INSERT INTO sessions VALUES ($1,$2,$3,$4,$5,$5,$6)", id, account.Id, Fingerprint(token), input.DeviceName ?? "Unknown device", Now, expires);
         return new(account, id, token, expires);
     }
-    public async Task<Actor> Authenticate(string? authorization, bool admin, bool accountMutation = true)
+    public async Task<Actor> Authenticate(string? authorization, bool admin, bool accountMutation = true, bool updateActivity = true)
     {
+        var seenAt = Now;
         if (authorization is null || !authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)) throw new AuthError(401, "authentication_required");
         var token = authorization[7..];
         if (token.Length != 64 || !token.All(Uri.IsHexDigit)) throw new AuthError(401, "authentication_required");
@@ -31,7 +32,20 @@ public sealed partial class AuthTransaction
         var account = (await Query($"SELECT {AccountColumns} FROM accounts WHERE id=$1 FOR {(accountMutation ? "NO KEY UPDATE" : "SHARE")}", ReadAccount, session.AccountId)).SingleOrDefault();
         if (account is null || !account.IsActive) throw new AuthError(401, "authentication_required");
         if (admin && !account.IsAdmin) throw new AuthError(403, "administrator_required");
-        await Run("UPDATE sessions SET last_seen_at=$2, expires_at=$3 WHERE id=$1", session.Id, Now, Now.AddDays(30));
+        if (updateActivity)
+        {
+            // Recheck after waiting for the account/session; an obsolete lookup is not authorization.
+            if (await Run("UPDATE sessions SET last_seen_at=GREATEST(last_seen_at,$2), expires_at=GREATEST(expires_at,$3) WHERE id=$1 AND expires_at>$4",
+                session.Id, seenAt, seenAt.AddDays(30), Now) == 0)
+                throw new AuthError(401, "authentication_required");
+        }
+        else
+        {
+            // Compatible with activity updates and other authorized operations, but not revocation.
+            // Keep this lock, and the account SHARE lock, until storage commits.
+            if (await Scalar("SELECT id FROM sessions WHERE id=$1 AND expires_at>$2 FOR KEY SHARE", session.Id, Now) is null)
+                throw new AuthError(401, "authentication_required");
+        }
         return new(account, session.Id);
     }
     public Task<List<SessionInfo>> Sessions(Actor actor) => Query("SELECT id, device_name, created_at, last_seen_at, expires_at FROM sessions WHERE account_id=$1 AND expires_at>$2 ORDER BY created_at", r => new SessionInfo(r.GetGuid(0), r.GetString(1), r.GetFieldValue<DateTimeOffset>(2), r.GetFieldValue<DateTimeOffset>(3), r.GetFieldValue<DateTimeOffset>(4), r.GetGuid(0) == actor.SessionId), actor.Account.Id, Now);
