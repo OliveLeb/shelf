@@ -4,12 +4,55 @@ using System.Text.Json;
 using Amazon.S3.Model;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
 using Xunit;
 
 namespace Shelf.Api.Tests;
 
 public sealed class CopyTests : TestInstance
 {
+    [Fact]
+    public async Task Personal_copy_does_not_block_another_users_personal_write()
+    {
+        var (_, alice) = await User("alice");
+        var (_, bob) = await User("bob");
+        using var observer = await SignIn("alice", device: "observer");
+        var source = Id(await Upload(alice, "photo.jpg"));
+        await using var gate = await App.Services.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync();
+        await using (var command = new NpgsqlCommand("SELECT pg_advisory_lock(33001)", gate))
+            await command.ExecuteNonQueryAsync();
+        await Sql("""
+            CREATE FUNCTION hold_copy_commit() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN IF NEW.name='photo (1).jpg' THEN PERFORM pg_advisory_xact_lock(33001); END IF; RETURN NEW; END; $$;
+            CREATE CONSTRAINT TRIGGER hold_copy_commit AFTER INSERT ON elements
+                DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION hold_copy_commit();
+            """);
+        var copying = alice.PostAsJsonAsync($"/elements/{source}/copy", new { });
+        try
+        {
+            await Eventually(async () =>
+            {
+                await using var command = new NpgsqlCommand("SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype='advisory' AND objid=33001 AND NOT granted AND database=(SELECT oid FROM pg_database WHERE datname=current_database()))", gate);
+                return (bool)(await command.ExecuteScalarAsync())!;
+            });
+            // The gate, not elapsed time, defines ordering. This deadline only detects a stuck request.
+            var folder = await Json(await bob.PostAsJsonAsync("/folders", new { name = "Independent" }).WaitAsync(TimeSpan.FromSeconds(10)));
+            Assert.Equal(Id(folder), Id(Assert.Single(await Root(bob))));
+            Assert.Equal(source, Id(Assert.Single(await Root(observer))));
+            Assert.False(copying.IsCompleted);
+        }
+        finally
+        {
+            await using var command = new NpgsqlCommand("SELECT pg_advisory_unlock(33001)", gate);
+            await command.ExecuteNonQueryAsync();
+        }
+        var copy = await Json(await copying);
+        Assert.Equal(2, (await Root(alice)).Length);
+        var link = await Json(await alice.GetAsync($"/files/{Id(copy)}/download"));
+        Assert.Equal(Photo, await Transfer.GetByteArrayAsync(link.GetProperty("url").GetString()));
+    }
+
     [Fact]
     public async Task Read_recipient_copies_a_folder_recursively_into_their_own_space_without_shares()
     {
