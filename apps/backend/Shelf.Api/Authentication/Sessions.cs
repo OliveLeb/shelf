@@ -32,18 +32,15 @@ public sealed partial class AuthTransaction
         var account = (await Query($"SELECT {AccountColumns} FROM accounts WHERE id=$1 FOR {(accountMutation ? "NO KEY UPDATE" : "SHARE")}", ReadAccount, session.AccountId)).SingleOrDefault();
         if (account is null || !account.IsActive) throw new AuthError(401, "authentication_required");
         if (admin && !account.IsAdmin) throw new AuthError(403, "administrator_required");
+        // Check the clock AFTER acquiring the session lock, not before a potentially long wait.
+        // KEY SHARE permits activity updates and other storage operations, but prevents revocation.
+        var expiry = await Query($"SELECT expires_at FROM sessions WHERE id=$1 FOR {(updateActivity ? "NO KEY UPDATE" : "KEY SHARE")}",
+            r => r.GetFieldValue<DateTimeOffset>(0), session.Id);
+        if (expiry.Count == 0 || expiry[0] <= Now) throw new AuthError(401, "authentication_required");
         if (updateActivity)
         {
-            // Recheck after waiting for the account/session; an obsolete lookup is not authorization.
-            if (await Run("UPDATE sessions SET last_seen_at=GREATEST(last_seen_at,$2), expires_at=GREATEST(expires_at,$3) WHERE id=$1 AND expires_at>$4",
-                session.Id, seenAt, seenAt.AddDays(30), Now) == 0)
-                throw new AuthError(401, "authentication_required");
-        }
-        else
-        {
-            // Compatible with activity updates and other authorized operations, but not revocation.
-            // Keep this lock, and the account SHARE lock, until storage commits.
-            if (await Scalar("SELECT id FROM sessions WHERE id=$1 AND expires_at>$2 FOR KEY SHARE", session.Id, Now) is null)
+            if (await Run("UPDATE sessions SET last_seen_at=GREATEST(last_seen_at,$2), expires_at=GREATEST(expires_at,$3) WHERE id=$1",
+                session.Id, seenAt, seenAt.AddDays(30)) == 0)
                 throw new AuthError(401, "authentication_required");
         }
         return new(account, session.Id);

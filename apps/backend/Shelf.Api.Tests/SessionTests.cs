@@ -11,14 +11,62 @@ namespace Shelf.Api.Tests;
 public sealed class SessionTests : TestInstance
 {
     [Theory]
-    [InlineData("/account")]
-    [InlineData("/spaces/personal/elements")]
-    public async Task A_session_expiring_while_authentication_waits_is_not_renewed(string route)
+    [InlineData("revoke")]
+    [InlineData("disable")]
+    [InlineData("delete")]
+    public async Task Storage_revalidates_access_after_committing_activity(string operation)
+    {
+        var (accountId, member) = await User();
+        using var control = await SignIn("member");
+        var sessions = await Json(await member.GetAsync("/account/sessions"));
+        var sessionId = sessions.EnumerateArray().Single(s => s.GetProperty("isCurrent").GetBoolean()).GetProperty("id").GetGuid();
+        await using var gate = await App.Services.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync();
+        await using (var command = new NpgsqlCommand("SELECT pg_advisory_lock(340037)", gate)) await command.ExecuteNonQueryAsync();
+        await Sql($"""
+            CREATE FUNCTION gate_activity_commit() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN PERFORM pg_advisory_xact_lock(340037); RETURN NEW; END; $$;
+            CREATE CONSTRAINT TRIGGER gate_activity_commit AFTER UPDATE ON sessions
+                DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.id='{sessionId}') EXECUTE FUNCTION gate_activity_commit();
+            """);
+        var creating = member.PostAsJsonAsync("/folders", new { name = "forbidden", space = "common" });
+        Task<HttpResponseMessage> withdrawal;
+        try
+        {
+            await WaitFor(gate, "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype='advisory' AND objid=340037 AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND NOT granted)");
+            withdrawal = operation switch
+            {
+                "disable" => Admin.PostAsync($"/admin/accounts/{accountId}/disable", null),
+                "delete" => Admin.DeleteAsync($"/admin/accounts/{accountId}"),
+                _ => control.DeleteAsync($"/account/sessions/{sessionId}")
+            };
+            // Queue withdrawal on the account before releasing activity's commit. PostgreSQL's
+            // lock queue puts withdrawal ahead of storage's subsequent account SHARE acquisition.
+            await WaitFor(gate, "SELECT EXISTS (SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid WHERE a.datname=current_database() AND l.locktype='transactionid' AND NOT l.granted)");
+        }
+        finally
+        {
+            await using var command = new NpgsqlCommand("SELECT pg_advisory_unlock(340037)", gate);
+            await command.ExecuteNonQueryAsync();
+        }
+        Assert.Equal(HttpStatusCode.NoContent, (await withdrawal).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await creating).StatusCode);
+        Assert.Empty((await Json(await Admin.GetAsync("/spaces/common/elements"))).EnumerateArray());
+    }
+
+    [Theory]
+    [InlineData("/account", false)]
+    [InlineData("/account", true)]
+    [InlineData("/spaces/personal/elements", false)]
+    [InlineData("/spaces/personal/elements", true)]
+    public async Task A_session_expiring_while_authentication_waits_is_not_renewed(string route, bool sessionLock)
     {
         var (id, member) = await User();
+        Clock.Advance(TimeSpan.FromDays(1));
         await using var gate = await App.Services.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync();
         await using var transaction = await gate.BeginTransactionAsync();
-        await using (var command = new NpgsqlCommand("SELECT id FROM accounts WHERE id=$1 FOR NO KEY UPDATE", gate, transaction))
+        await using (var command = new NpgsqlCommand(sessionLock
+            ? "SELECT id FROM sessions WHERE account_id=$1 FOR NO KEY UPDATE"
+            : "SELECT id FROM accounts WHERE id=$1 FOR NO KEY UPDATE", gate, transaction))
         {
             command.Parameters.AddWithValue(id);
             await command.ExecuteNonQueryAsync();
@@ -30,9 +78,9 @@ public sealed class SessionTests : TestInstance
             {
                 await using var command = new NpgsqlCommand("SELECT EXISTS (SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid WHERE a.datname=current_database() AND l.locktype='transactionid' AND NOT l.granted)", gate, transaction);
                 if ((bool)(await command.ExecuteScalarAsync())!) break;
-                Assert.True(DateTime.UtcNow < deadline, "Authentication did not reach the account lock.");
+                Assert.True(DateTime.UtcNow < deadline, "Authentication did not reach the controlled row lock.");
             }
-            Clock.Advance(TimeSpan.FromDays(30));
+            Clock.Advance(TimeSpan.FromDays(29));
         }
         finally { await transaction.CommitAsync(); }
         Assert.Equal(HttpStatusCode.Unauthorized, (await reading).StatusCode);
@@ -65,10 +113,10 @@ public sealed class SessionTests : TestInstance
         Task<HttpResponseMessage> reading;
         try
         {
-            await WaitFor("SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype='advisory' AND objid=340035 AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND NOT granted)");
+            await WaitFor(gate, "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype='advisory' AND objid=340035 AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND NOT granted)");
             reading = member.GetAsync("/spaces/personal/elements");
             // This wait proves that the request has found the still-visible session and reached the account lock.
-            await WaitFor("SELECT EXISTS (SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid WHERE a.datname=current_database() AND l.locktype='transactionid' AND NOT l.granted)");
+            await WaitFor(gate, "SELECT EXISTS (SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid WHERE a.datname=current_database() AND l.locktype='transactionid' AND NOT l.granted)");
         }
         finally
         {
@@ -78,15 +126,15 @@ public sealed class SessionTests : TestInstance
         Assert.Equal(HttpStatusCode.NoContent, (await revoking).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await reading).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await member.PostAsJsonAsync("/folders", new { name = "forbidden" })).StatusCode);
+    }
 
-        async Task WaitFor(string sql)
+    private static async Task WaitFor(NpgsqlConnection gate, string sql)
+    {
+        for (var deadline = DateTime.UtcNow.AddSeconds(15); ; await Task.Delay(25))
         {
-            for (var deadline = DateTime.UtcNow.AddSeconds(15); ; await Task.Delay(25))
-            {
-                await using var command = new NpgsqlCommand(sql, gate);
-                if ((bool)(await command.ExecuteScalarAsync())!) return;
-                Assert.True(DateTime.UtcNow < deadline, "Session race did not reach its synchronization point.");
-            }
+            await using var command = new NpgsqlCommand(sql, gate);
+            if ((bool)(await command.ExecuteScalarAsync())!) return;
+            Assert.True(DateTime.UtcNow < deadline, "Session race did not reach its synchronization point.");
         }
     }
 
