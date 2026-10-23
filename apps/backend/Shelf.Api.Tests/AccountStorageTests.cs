@@ -11,6 +11,51 @@ namespace Shelf.Api.Tests;
 
 public sealed class AccountStorageTests : TestInstance
 {
+    [Theory]
+    [InlineData("disable")]
+    [InlineData("delete")]
+    public async Task Account_removal_waits_for_an_already_authorized_copy(string operation)
+    {
+        var (id, owner) = await User();
+        var source = Id(await Upload(owner, "photo.jpg"));
+        await using var gate = await App.Services.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync();
+        await using (var command = new NpgsqlCommand("SELECT pg_advisory_lock(340036)", gate)) await command.ExecuteNonQueryAsync();
+        await Sql("""
+            CREATE FUNCTION gate_authorized_copy() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN IF NEW.name='photo (1).jpg' THEN PERFORM pg_advisory_xact_lock(340036); END IF; RETURN NEW; END; $$;
+            CREATE CONSTRAINT TRIGGER gate_authorized_copy AFTER INSERT ON elements
+                DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION gate_authorized_copy();
+            """);
+        var copying = owner.PostAsJsonAsync($"/elements/{source}/copy", new { });
+        Task<HttpResponseMessage> removal;
+        try
+        {
+            await WaitFor("SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype='advisory' AND objid=340036 AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND NOT granted)");
+            removal = operation == "disable" ? Admin.PostAsync($"/admin/accounts/{id}/disable", null) : Admin.DeleteAsync($"/admin/accounts/{id}");
+            await WaitFor("SELECT EXISTS (SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid WHERE a.datname=current_database() AND l.locktype='transactionid' AND NOT l.granted)");
+            Assert.False(removal.IsCompleted);
+        }
+        finally
+        {
+            await using var command = new NpgsqlCommand("SELECT pg_advisory_unlock(340036)", gate);
+            await command.ExecuteNonQueryAsync();
+        }
+        Assert.Equal(HttpStatusCode.Created, (await copying).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await removal).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await owner.GetAsync("/spaces/personal/elements")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await owner.PostAsJsonAsync($"/elements/{source}/copy", new { })).StatusCode);
+
+        async Task WaitFor(string sql)
+        {
+            for (var deadline = DateTime.UtcNow.AddSeconds(15); ; await Task.Delay(25))
+            {
+                await using var command = new NpgsqlCommand(sql, gate);
+                if ((bool)(await command.ExecuteScalarAsync())!) return;
+                Assert.True(DateTime.UtcNow < deadline, "Account removal did not reach its synchronization point.");
+            }
+        }
+    }
+
     private static async Task<Guid> Folder(HttpClient client, string name, string? space = null) =>
         Id(await Json(await client.PostAsJsonAsync("/folders", new { name, space })));
     private async Task<string[]> Objects() => [.. ((await S3.ListObjectsV2Async(new() { BucketName = Bucket })).S3Objects ?? []).Select(o => o.Key).Order()];
