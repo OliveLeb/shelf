@@ -76,7 +76,7 @@ public sealed class ThumbnailWorker(NpgsqlDataSource source, ObjectStore store, 
             await using var connection = await source.OpenConnectionAsync(deadline.Token);
             await using var transaction = await connection.BeginTransactionAsync(deadline.Token);
             await using var gate = new NpgsqlCommand("SELECT pg_advisory_xact_lock_shared($1)", connection, transaction);
-            gate.Parameters.AddWithValue(StorageTransaction.CopyReconciliationLock);
+            gate.Parameters.AddWithValue(StorageTransaction.ObjectPublicationReconciliationLock);
             await gate.ExecuteNonQueryAsync(deadline.Token);
             await store.PutThumbnail(work.ThumbnailKey, output, deadline.Token);
             await Finish(work, true, connection, transaction, deadline.Token);

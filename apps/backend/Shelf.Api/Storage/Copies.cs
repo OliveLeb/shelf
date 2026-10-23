@@ -4,14 +4,15 @@ namespace Shelf.Api.Storage;
 
 public sealed partial class StorageTransaction
 {
-    // Shared by copies, exclusive to orphan reconciliation; unrelated to account-operation locks.
-    internal const long CopyReconciliationLock = 742013511;
+    // Shared by object publishers (upload confirmations, copies and miniatures), exclusive to orphan
+    // reconciliation across API processes. Keep this identity stable; unrelated to account-operation locks.
+    internal const long ObjectPublicationReconciliationLock = 742013511;
 
     public async Task<Element> Copy(Account account, Guid elementId, CopyRequest input)
     {
         // S3 objects become visible before the metadata transaction commits. Reconciliation must
         // wait for that commit (or rollback), rather than enqueue these objects as orphans.
-        await Run("SELECT pg_advisory_xact_lock_shared($1)", CopyReconciliationLock);
+        await Run("SELECT pg_advisory_xact_lock_shared($1)", ObjectPublicationReconciliationLock);
         await LockSpaces(account, moving: true, elementId: elementId, folderId: input.ParentId,
             rootSpace: input.ParentId is null ? input.Space ?? "personal" : null);
         await Access(account, elementId);
