@@ -6,11 +6,12 @@ namespace Shelf.Api.Storage;
 /// <summary>Storage operations in one PostgreSQL transaction, without the account advisory lock.</summary>
 public sealed partial class StorageTransaction(NpgsqlConnection connection, NpgsqlTransaction transaction, ObjectStore store, TimeProvider clock, CancellationToken cancellation)
 {
-    private const string ElementColumns = "e.id, e.kind, e.name, e.parent_id, e.size, e.content_type, e.added_at, a.id, a.username, e.thumbnail_state FROM elements e JOIN spaces s ON s.id=e.space_id LEFT JOIN accounts a ON a.id=e.added_by";
+    // Keep these ten columns in ReadElement order; query-specific fields follow them.
+    private const string ElementColumns = "e.id, e.kind, e.name, e.parent_id, e.size, e.content_type, e.added_at, a.id, a.username, e.thumbnail_state";
     private static Element ReadElement(NpgsqlDataReader r) => new(r.GetGuid(0), r.GetString(1), r.GetString(2),
         r.IsDBNull(3) ? null : r.GetGuid(3), r.IsDBNull(4) ? null : r.GetInt64(4), r.IsDBNull(5) ? null : r.GetString(5), r.GetFieldValue<DateTimeOffset>(6),
         r.IsDBNull(7) ? null : new AccountSummary(r.GetGuid(7), r.GetString(8)),
-        r.IsDBNull(r.GetOrdinal("thumbnail_state")) ? null : r.GetString(r.GetOrdinal("thumbnail_state")));
+        r.IsDBNull(9) ? null : r.GetString(9));
     private static readonly Dictionary<string, string> Sorts = new() { ["name"] = "lower(e.name) {0}, e.name {0}", ["addedAt"] = "e.added_at {0}", ["size"] = "e.size {0}" };
 
     /// <summary>Content of a visible folder, or of the selected space's root. Folders come before files.</summary>
@@ -19,7 +20,12 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
         if (!Sorts.TryGetValue(sort ?? "name", out var key)) throw new StorageError(400, "invalid_sort");
         if ((order ??= "asc") is not ("asc" or "desc")) throw new StorageError(400, "invalid_order");
         var destination = await Destination(account, folderId, space, writable: false);
-        return await Query($"SELECT {ElementColumns} WHERE e.space_id=$1 AND e.parent_id IS NOT DISTINCT FROM $2 AND e.trash_id IS NULL ORDER BY e.kind='file', {string.Format(key, order)}, lower(e.name), e.id",
+        return await Query($"""
+            SELECT {ElementColumns}
+            FROM elements e JOIN spaces s ON s.id=e.space_id LEFT JOIN accounts a ON a.id=e.added_by
+            WHERE e.space_id=$1 AND e.parent_id IS NOT DISTINCT FROM $2 AND e.trash_id IS NULL
+            ORDER BY e.kind='file', {string.Format(key, order)}, lower(e.name), e.id
+            """,
             ReadElement, destination, folderId);
     }
 
@@ -94,7 +100,7 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
     public async Task<Element> Complete(Account account, Guid uploadId)
     {
         // Publication creates an S3 object before its database reference commits, just like a copy.
-        await Run("SELECT pg_advisory_xact_lock_shared($1)", CopyReconciliationLock);
+        await Run("SELECT pg_advisory_xact_lock_shared($1)", ObjectPublicationReconciliationLock);
         // Serialize confirmation with replacement, trash, restore and moves before resolving the current name.
         await LockSpaces(account, moving: true, uploadId: uploadId);
         var upload = await PendingUpload(account, uploadId);
@@ -272,7 +278,11 @@ public sealed partial class StorageTransaction(NpgsqlConnection connection, Npgs
         return access.Space;
     }
 
-    private async Task<Element> Get(Guid id) => (await Query($"SELECT {ElementColumns} WHERE e.id=$1", ReadElement, id)).Single();
+    private async Task<Element> Get(Guid id) => (await Query($"""
+        SELECT {ElementColumns}
+        FROM elements e JOIN spaces s ON s.id=e.space_id LEFT JOIN accounts a ON a.id=e.added_by
+        WHERE e.id=$1
+        """, ReadElement, id)).Single();
 
     /// <summary>"keep both" name: photo.jpg, then photo (1).jpg, photo (2).jpg…</summary>
     private static string Numbered(string name, int number)
