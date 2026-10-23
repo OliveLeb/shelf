@@ -1,0 +1,29 @@
+{
+  "name": "@shelf/mobile",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vp dev",
+    "build": "vp build",
+    "preview": "vp preview",
+    "test": "vp test --passWithNoTests",
+    "sync": "vp build && cap sync"
+  },
+  "dependencies": {
+    "@capacitor/core": "catalog:",
+    "@nuxt/ui": "catalog:",
+    "@shelf/ui": "workspace:*",
+    "tailwindcss": "catalog:",
+    "vue": "catalog:",
+    "vue-router": "catalog:"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "catalog:",
+    "@vitejs/plugin-vue": "catalog:",
+    "@vue/tsconfig": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plus": "catalog:",
+    "vue-tsc": "catalog:"
+  }
+}

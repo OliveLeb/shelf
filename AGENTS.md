@@ -23,3 +23,8 @@ Chaque issue travaillée a sa branche dédiée ; une PR brouillon est ouverte d�
 ### Contrat API
 
 Toute route HTTP ajoutée, modifiée ou supprimée met à jour `contracts/openapi.json` et la collection Bruno `contracts/bruno/` dans le même commit (`./contracts/generate.sh`). Voir `docs/agents/api-contract.md`.
+
+### Frontend
+
+Web, mobile et `packages/` forment un workspace pnpm outillé par Vite+ ; Node.js s'exécute dans Docker
+(`docker compose run --rm node pnpm check`, puis `pnpm test`). Voir la section « Démarrer le web et le mobile » du `README.md`.

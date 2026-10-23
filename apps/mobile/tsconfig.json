@@ -1,0 +1,21 @@
+{
+  "extends": "@vue/tsconfig/tsconfig.dom.json",
+  "compilerOptions": {
+    "types": ["vite/client"],
+    "paths": {
+      "#build/ui": ["./node_modules/.nuxt-ui/ui"],
+      "#build/ui/*": ["./node_modules/.nuxt-ui/ui/*"]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.vue",
+    "vite.config.ts",
+    "capacitor.config.ts",
+    "auto-imports.d.ts",
+    "components.d.ts"
+  ],
+  "vueCompilerOptions": {
+    "strictTemplates": true
+  }
+}

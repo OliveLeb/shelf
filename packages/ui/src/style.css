@@ -1,0 +1,5 @@
+@import 'tailwindcss';
+@import '@nuxt/ui';
+
+/* Workspace packages sit outside the apps' roots: scan them explicitly. */
+@source './components';

@@ -1,0 +1,29 @@
+{
+  "name": "@shelf/ui",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./theme": "./src/theme.ts",
+    "./style.css": "./src/style.css"
+  },
+  "scripts": {
+    "build": "vp build",
+    "test": "vp test"
+  },
+  "dependencies": {
+    "@nuxt/ui": "catalog:",
+    "tailwindcss": "catalog:",
+    "vue": "catalog:"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "catalog:",
+    "@vue/test-utils": "catalog:",
+    "@vue/tsconfig": "catalog:",
+    "happy-dom": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plus": "catalog:",
+    "vue-tsc": "catalog:"
+  }
+}

@@ -5,14 +5,17 @@ Application de stockage de photos, vidéos et fichiers.
 ## Organisation du monorepo
 
 - `apps/backend/` : API ASP.NET Core (.NET 10) et solution .NET.
-- `apps/web/` : future application web, technologie à choisir.
-- `apps/mobile/` : future application mobile, technologie à choisir.
+- `apps/web/` : application web Vue 3 + Nuxt UI (squelette).
+- `apps/mobile/` : application mobile Vue 3 + Nuxt UI + Capacitor (squelette).
+- `packages/ui/` : design system partagé par le web et le mobile (`@shelf/ui`).
 - `contracts/` : contrat OpenAPI généré et collection Bruno.
-- `compose.yaml` : PostgreSQL et MinIO (S3) pour le développement local.
+- `compose.yaml` : PostgreSQL, MinIO (S3), et outillage Node.js our le développement local.
 - `infra/` : documentation des services et du déploiement.
 - `docs/` : documentation du projet et décisions techniques.
 
-Chaque application conserve ses dépendances et son déploiement propres.
+Le backend .NET reste indépendant. Le web, le mobile et `packages/` forment un
+workspace pnpm unique, outillé par [Vite+](https://viteplus.dev/) : Vite, Vitest,
+Oxlint et Oxfmt. Voir [l'ADR 0003](docs/adr/0003-vue-capacitor-frontends.md).
 
 ## Démarrer le backend
 
@@ -50,11 +53,40 @@ Le stockage des fichiers est en cours : envoi et téléchargement dans l'espace
 personnel, voir [son contrat](docs/storage.md). Les applications clientes restent à implémenter.
 Ne pas ajouter de fichiers personnels ni de secrets au dépôt.
 
+## Démarrer le web et le mobile
+
+Prérequis : Docker avec Docker Compose. Node.js tourne dans un conteneur
+(`infra/node/`, Node 24 LTS et pnpm via Corepack) ; aucune installation locale
+n'est nécessaire. Les services Node appartiennent au profil Compose `front` et ne
+démarrent pas avec `docker compose up` seul.
+
+```sh
+docker compose run --rm node pnpm install
+docker compose --profile front up web mobile
+```
+
+Le web est servi sur http://localhost:3000 (l'origine attendue par
+`Authentication__ClientOrigin`) et le mobile, dans le navigateur, sur
+http://localhost:3001. Les modifications de `packages/ui` sont rechargées à chaud
+dans les deux.
+
+Les commandes du workspace se lancent dans le même conteneur :
+
+```sh
+docker compose run --rm node pnpm check   # format, lint, build et vérification des types
+docker compose run --rm node pnpm test    # tests Vitest
+docker compose run --rm node pnpm exec vp check --fix  # corrige format et lint
+```
+
+Le conteneur s'exécute avec l'utilisateur `node` (UID 1000) : sous Linux, le dépôt
+doit appartenir à cet UID pour que `node_modules` soit inscriptible. Les
+`node_modules` installés sont des binaires Linux.
+
 ## Intégration continue
 
 GitHub Actions vérifie les PR vers toutes les branches, les poussées sur `main`,
 les groupes de fusion et les lancements manuels. Le statut à rendre obligatoire
-pour protéger `main` est **Backend and contracts**.
+pour protéger `main` sont **Backend and contracts** et **Frontend**.
 
 Un seul job Ubuntu restaure les dépendances NuGet verrouillées (avec cache),
 compile la solution en Release, vérifie OpenAPI et Bruno puis lance les tests
@@ -64,12 +96,14 @@ Les nouvelles poussées annulent les exécutions précédentes du même contexte
 Les résultats de tests et diagnostics de blocage sont conservés sept jours en
 cas d'échec.
 
-Les changements limités à la documentation ou aux emplacements web/mobile
-évitent l'installation des outils, les services et les tests ; le statut reste
-présent pour les protections de branche. Les lancements manuels et les historiques
-non comparables exécutent toutes les vérifications. Quand une application cliente
-sera implémentée, ajouter ses vérifications et adapter le filtre
-`.github/scripts/ci-scope.sh`.
+Le job **Frontend** installe Node.js selon `.node-version`, les dépendances pnpm
+verrouillées, puis lance `pnpm check` et `pnpm test`.
+
+Le filtre `.github/scripts/ci-scope.sh` n'exécute que les vérifications concernées :
+la documentation seule évite les deux jobs, le web, le mobile et `packages/` évitent
+le backend. Chaque statut reste présent pour les protections de branche. Les
+lancements manuels et les historiques non comparables exécutent toutes les
+vérifications.
 
 Pour reproduire les vérifications localement, avec les services Compose démarrés :
 
@@ -82,5 +116,7 @@ dotnet test apps/backend/Shelf.slnx --configuration Release --no-build --no-rest
 ```
 
 Après une modification de dépendance, lancer `dotnet restore apps/backend/Shelf.slnx`
-et committer les `packages.lock.json` actualisés. Les mises à jour des actions
-GitHub épinglées par SHA sont proposées chaque semaine par Dependabot.
+et committer les `packages.lock.json` actualisés. Côté front, les versions sont
+déclarées dans le catalogue de `pnpm-workspace.yaml` et `pnpm-lock.yaml` est
+committé. Dependabot propose chaque semaine les mises à jour des actions GitHub
+épinglées par SHA, des dépendances npm (groupées) et de l'image Node.

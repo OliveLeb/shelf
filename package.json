@@ -1,0 +1,19 @@
+{
+  "name": "shelf",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "vp check && vp run -r typecheck",
+    "test": "vp run -r test",
+    "build": "vp run -r build",
+    "dev:web": "vp run @shelf/web#dev",
+    "dev:mobile": "vp run @shelf/mobile#dev"
+  },
+  "devDependencies": {
+    "vite-plus": "catalog:"
+  },
+  "engines": {
+    "node": ">=24.22.0"
+  },
+  "packageManager": "pnpm@12.15.0"
+}
