@@ -50,8 +50,15 @@ secret n’est écrit dans les stockages JavaScript. La session est revérifiée
 au démarrage, au retour sur l’onglet et à l’actualisation de l’espace.
 Sur les navigateurs modernes disposant de Web Locks (contexte HTTPS), les
 connexions/déconnexions attendent les requêtes API des autres onglets pour qu’une
-ancienne réponse ne remplace pas le nouveau cookie. Sans Web Locks, cette
-coordination entre onglets n’est pas disponible ; les contrôles serveur restent actifs.
+ancienne réponse ne remplace pas le nouveau cookie. Un marqueur aléatoire dans
+localStorage, sans secret ni identité de compte, change sous verrou avant chaque
+connexion/déconnexion. Les autres onglets masquent leurs données et revérifient
+la session lorsqu’ils reçoivent cet événement. Chaque requête liée au compte
+vérifie aussi le marqueur sous verrou : une action de l’ancienne session est
+refusée avant envoi, même si l’événement n’est pas encore arrivé, sans être rejouée.
+Le stockage local doit être accessible ; sinon les requêtes échouent sans envoi.
+Sans Web Locks, la sérialisation entre onglets n’est pas garantie ; les contrôles
+serveur restent actifs.
 
 `vp run typecheck` construit l'application avant `vue-tsc` : le plugin Nuxt UI
 génère pendant le build les déclarations `components.d.ts` et `auto-imports.d.ts`

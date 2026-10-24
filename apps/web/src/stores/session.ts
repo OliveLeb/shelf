@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { shallowRef } from 'vue'
-import { api, ApiError } from '../api'
+import { api, ApiError, SessionChangedError } from '../api'
 
 export interface Account {
   id: string
@@ -15,6 +15,7 @@ export const useSession = defineStore('session', () => {
   const status = shallowRef<'checking' | 'authenticated' | 'anonymous' | 'error'>('checking')
   const logoutFailed = shallowRef(false)
   let generation = 0
+  let version: string | null = null
   let verification: Promise<void> | undefined
 
   function clear(next: typeof status.value) {
@@ -36,8 +37,11 @@ export const useSession = defineStore('session', () => {
     const current = generation
     verification = (async () => {
       try {
-        const value = await api<Account>('/account')
-        if (current === generation) accept(value)
+        const result = await api<Account>('/account')
+        if (current === generation) {
+          version = result.version
+          accept(result.value)
+        }
       } catch (error) {
         if (current === generation) {
           clear(error instanceof ApiError && error.status === 401 ? 'anonymous' : 'error')
@@ -49,27 +53,39 @@ export const useSession = defineStore('session', () => {
     return verification
   }
 
+  async function invalidate() {
+    clear('checking')
+    // A verification already in flight belongs to the old generation.
+    await verification
+    await verify()
+  }
+
   async function login(identifier: string, password: string) {
-    const value = await api<Account>('/auth/web/login', {
+    const result = await api<Account>('/auth/web/login', {
       method: 'POST',
       body: JSON.stringify({ identifier, password, deviceName: 'Navigateur web' }),
     })
     clear('anonymous')
     logoutFailed.value = false
-    accept(value)
+    version = result.version
+    accept(result.value)
   }
 
   async function logout() {
     clear('checking')
     try {
-      await api<void>('/auth/logout', { method: 'POST' })
+      await api<void>('/auth/logout', { method: 'POST' }, version)
       logoutFailed.value = false
       clear('anonymous')
     } catch (error) {
-      if (error instanceof ApiError && error.status === 401) {
+      if (error instanceof SessionChangedError) {
+        await invalidate()
+      } else if (error instanceof ApiError && error.status === 401) {
         logoutFailed.value = false
         clear('anonymous')
       } else {
+        // Retry this logout's generation, never a replacement from another tab.
+        if (error instanceof ApiError) version = error.version
         logoutFailed.value = true
         clear('error')
       }
@@ -79,15 +95,17 @@ export const useSession = defineStore('session', () => {
   async function request<T>(path: string, options?: RequestInit) {
     const current = generation
     try {
-      const result = await api<T>(path, options)
+      const result = await api<T>(path, options, version)
       if (current !== generation) throw new DOMException('Session changed', 'AbortError')
-      return result
+      return result.value
     } catch (error) {
-      if (current === generation && error instanceof ApiError && error.status === 401)
-        clear('anonymous')
+      if (current === generation) {
+        if (error instanceof SessionChangedError) await invalidate()
+        else if (error instanceof ApiError && error.status === 401) clear('anonymous')
+      }
       throw error
     }
   }
 
-  return { account, status, logoutFailed, verify, login, logout, request }
+  return { account, status, logoutFailed, verify, invalidate, login, logout, request }
 })

@@ -2,7 +2,8 @@
 import { fr } from '@nuxt/ui/locale'
 import { onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { destination } from './router'
+import { sessionVersionKey } from './api'
+import { sessionRedirect } from './router'
 import { useSession } from './stores/session'
 
 const session = useSession()
@@ -12,11 +13,8 @@ const route = useRoute()
 watch(
   () => session.status,
   (status) => {
-    if (status === 'anonymous' && route.meta.protected) {
-      void router.replace({ name: 'login', query: { retour: route.fullPath } })
-    } else if (status === 'authenticated' && route.name === 'login') {
-      void router.replace(destination(router, route.query.retour))
-    }
+    const redirect = sessionRedirect(router, route, status)
+    if (redirect) void router.replace(redirect)
   },
 )
 
@@ -25,12 +23,19 @@ function refresh() {
     void session.verify()
 }
 
+function sessionChanged(event: StorageEvent) {
+  if (event.storageArea === localStorage && (event.key === sessionVersionKey || event.key === null))
+    void session.invalidate()
+}
+
 onMounted(() => {
+  window.addEventListener('storage', sessionChanged)
   window.addEventListener('focus', refresh)
   window.addEventListener('pageshow', refresh)
   document.addEventListener('visibilitychange', refresh)
 })
 onUnmounted(() => {
+  window.removeEventListener('storage', sessionChanged)
   window.removeEventListener('focus', refresh)
   window.removeEventListener('pageshow', refresh)
   document.removeEventListener('visibilitychange', refresh)
@@ -60,6 +65,9 @@ onUnmounted(() => {
         >Réessayer</UButton
       >
     </main>
-    <RouterView v-else :key="session.account?.id" />
+    <RouterView
+      v-else-if="!route.meta.protected || session.status === 'authenticated'"
+      :key="session.account?.id"
+    />
   </UApp>
 </template>

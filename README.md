@@ -37,7 +37,7 @@ Lancer ensuite l'API :
 dotnet restore apps/backend/Shelf.slnx
 dotnet build apps/backend/Shelf.slnx --no-restore
 export ConnectionStrings__Shelf='Host=localhost;Database=shelf;Username=shelf'
-export Authentication__ClientOrigin='http://localhost:3000'
+export Authentication__ClientOrigin='https://localhost:3000'
 # Configuration S3 (Storage__S3__*) : voir infra/README.md.
 dotnet run --project apps/backend/Shelf.Api --no-launch-profile -- migrate
 dotnet run --project apps/backend/Shelf.Api --no-launch-profile -- admin create owner owner@example.test
@@ -65,10 +65,13 @@ docker compose run --rm node pnpm install
 docker compose --profile front up web mobile
 ```
 
-Le web est servi sur http://localhost:3000 (l'origine attendue par
+Le web est servi sur https://localhost:3000 (l'origine attendue par
 `Authentication__ClientOrigin`) et le mobile, dans le navigateur, sur
 http://localhost:3001. Les modifications de `packages/ui` sont rechargées à chaud
 dans les deux.
+
+Pour le certificat local HTTPS et la connexion du conteneur web à l’API sur
+l’hôte, suivre [la configuration web](apps/web/README.md).
 
 Les commandes du workspace se lancent dans le même conteneur :
 
