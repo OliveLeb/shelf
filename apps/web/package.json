@@ -11,13 +11,18 @@
   "dependencies": {
     "@nuxt/ui": "catalog:",
     "@shelf/ui": "workspace:*",
+    "pinia": "catalog:",
     "tailwindcss": "catalog:",
     "vue": "catalog:",
     "vue-router": "catalog:"
   },
   "devDependencies": {
+    "@iconify-json/lucide": "catalog:",
+    "@vitejs/plugin-basic-ssl": "catalog:",
     "@vitejs/plugin-vue": "catalog:",
+    "@vue/test-utils": "catalog:",
     "@vue/tsconfig": "catalog:",
+    "happy-dom": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vite-plus": "catalog:",

@@ -17,7 +17,7 @@ public static class HttpEndpoints
     public static void MapStorageBackend(this WebApplication app)
     {
         var store = app.Services.GetRequiredService<ObjectStore>();
-        var api = app.MapGroup("").WithTags("Storage");
+        var api = app.MapGroup("").WithTags("Storage").WithMetadata(new SessionTransport.Policy());
         api.AddEndpointFilter(async (context, next) =>
         {
             var http = context.HttpContext;
@@ -25,23 +25,25 @@ public static class HttpEndpoints
             var clock = http.RequestServices.GetRequiredService<TimeProvider>();
             try
             {
+                var authorization = SessionTransport.Authorization(http);
                 await using var connection = await http.RequestServices.GetRequiredService<NpgsqlDataSource>().OpenConnectionAsync(http.RequestAborted);
                 // Commit activity before the long operation, without the account advisory lock.
                 await using (var activity = await connection.BeginTransactionAsync(http.RequestAborted))
                 {
-                    await new AuthTransaction(connection, activity, clock, http.RequestAborted).Authenticate(http.Request.Headers.Authorization, admin: false, accountMutation: false);
+                    await new AuthTransaction(connection, activity, clock, http.RequestAborted).Authenticate(authorization, admin: false, accountMutation: false);
                     await activity.CommitAsync(http.RequestAborted);
                 }
                 await using var transaction = await connection.BeginTransactionAsync(http.RequestAborted);
                 // Revalidate access and protect it through commit; activity must not hold an exclusive lock here.
-                var actor = await new AuthTransaction(connection, transaction, clock, http.RequestAborted).Authenticate(http.Request.Headers.Authorization, admin: false, accountMutation: false, updateActivity: false);
+                var actor = await new AuthTransaction(connection, transaction, clock, http.RequestAborted).Authenticate(authorization, admin: false, accountMutation: false, updateActivity: false);
                 http.Items[typeof(Account)] = actor.Account;
                 http.Items[typeof(StorageTransaction)] = new StorageTransaction(connection, transaction, store, clock, http.RequestAborted);
                 var result = await next(context);
                 await transaction.CommitAsync(http.RequestAborted);
+                SessionTransport.Renew(http, actor, result);
                 return result;
             }
-            catch (AuthError error) { return Results.Json(new { error = error.Code }, statusCode: error.Status); }
+            catch (AuthError error) { return SessionTransport.Reject(http, error); }
             catch (StorageError error) { return Results.Json(new { error = error.Code }, statusCode: error.Status); }
             catch (PostgresException error) when (error.SqlState == PostgresErrorCodes.UniqueViolation)
             { return Results.Conflict(new { error = "name_conflict" }); }

@@ -15,6 +15,16 @@ public sealed partial class AuthTransaction
         await Run("INSERT INTO sessions VALUES ($1,$2,$3,$4,$5,$5,$6)", id, account.Id, Fingerprint(token), input.DeviceName ?? "Unknown device", Now, expires);
         return new(account, id, token, expires);
     }
+
+    public async Task<LoginResult> WebLogin(Login input, string? previousToken)
+    {
+        var login = await Login(input);
+        // Replacement is atomic with login. An expired/revoked cookie must not prevent a fresh login.
+        if (previousToken is not null)
+            await Run("DELETE FROM sessions WHERE token_hash=$1", Fingerprint(previousToken));
+        return login;
+    }
+
     public async Task<Actor> Authenticate(string? authorization, bool admin, bool accountMutation = true, bool updateActivity = true)
     {
         var seenAt = Now;
@@ -39,11 +49,12 @@ public sealed partial class AuthTransaction
         if (expiry.Count == 0 || expiry[0] <= Now) throw new AuthError(401, "authentication_required");
         if (updateActivity)
         {
-            if (await Run("UPDATE sessions SET last_seen_at=GREATEST(last_seen_at,$2), expires_at=GREATEST(expires_at,$3) WHERE id=$1",
-                session.Id, seenAt, seenAt.AddDays(30)) == 0)
+            expiry = await Query("UPDATE sessions SET last_seen_at=GREATEST(last_seen_at,$2), expires_at=GREATEST(expires_at,$3) WHERE id=$1 RETURNING expires_at",
+                r => r.GetFieldValue<DateTimeOffset>(0), session.Id, seenAt, seenAt.AddDays(30));
+            if (expiry.Count == 0)
                 throw new AuthError(401, "authentication_required");
         }
-        return new(account, session.Id);
+        return new(account, session.Id, expiry[0]);
     }
     public Task<List<SessionInfo>> Sessions(Actor actor) => Query("SELECT id, device_name, created_at, last_seen_at, expires_at FROM sessions WHERE account_id=$1 AND expires_at>$2 ORDER BY created_at", r => new SessionInfo(r.GetGuid(0), r.GetString(1), r.GetFieldValue<DateTimeOffset>(2), r.GetFieldValue<DateTimeOffset>(3), r.GetFieldValue<DateTimeOffset>(4), r.GetGuid(0) == actor.SessionId), actor.Account.Id, Now);
     public async Task RevokeSession(Actor actor, Guid id)

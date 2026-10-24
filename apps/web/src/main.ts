@@ -1,14 +1,12 @@
 import './main.css'
 
 import ui from '@nuxt/ui/vue-plugin'
+import { createPinia } from 'pinia'
 import { createApp } from 'vue'
-import { createRouter, createWebHistory } from 'vue-router'
 import App from './App.vue'
-import HomePage from './pages/HomePage.vue'
+import { makeRouter } from './router'
 
-const router = createRouter({
-  history: createWebHistory(),
-  routes: [{ path: '/', component: HomePage }],
-})
+const pinia = createPinia()
+const router = makeRouter(pinia)
 
-createApp(App).use(router).use(ui).mount('#app')
+createApp(App).use(pinia).use(router).use(ui).mount('#app')

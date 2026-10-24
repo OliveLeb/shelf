@@ -19,7 +19,7 @@ builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 
 builder.Services.AddHealthChecks();
 builder.Services.AddOpenApi(options =>
 {
-    // Routes require a session token unless they are marked AllowAnonymous().
+    // Protected routes accept exactly one opaque-session transport: Bearer OR web cookie.
     options.AddDocumentTransformer((document, _, _) =>
     {
         document.Info.Title = "Shelf API";
@@ -27,12 +27,59 @@ builder.Services.AddOpenApi(options =>
         document.Components ??= new();
         document.Components.SecuritySchemes ??= new Dictionary<string, IOpenApiSecurityScheme>();
         document.Components.SecuritySchemes["Bearer"] = new OpenApiSecurityScheme { Type = SecuritySchemeType.Http, Scheme = "bearer" };
+        document.Components.SecuritySchemes["WebSession"] = new OpenApiSecurityScheme
+        {
+            Type = SecuritySchemeType.ApiKey, In = ParameterLocation.Cookie, Name = SessionTransport.CookieName,
+            Description = "Persistent HttpOnly Secure SameSite=Strict host-only cookie, Path=/. Never combine with Authorization."
+        };
+        document.Components.SecuritySchemes["WebCsrf"] = new OpenApiSecurityScheme
+        {
+            Type = SecuritySchemeType.ApiKey, In = ParameterLocation.Header, Name = "X-Shelf-CSRF",
+            Description = "Value must be exactly 1. Web unsafe requests also require Origin exactly equal to Authentication:ClientOrigin; no permissive CORS is provided."
+        };
         return Task.CompletedTask;
     });
     options.AddOperationTransformer((operation, context, _) =>
     {
-        if (!context.Description.ActionDescriptor.EndpointMetadata.OfType<IAllowAnonymous>().Any())
+        var metadata = context.Description.ActionDescriptor.EndpointMetadata;
+        var policy = metadata.OfType<SessionTransport.Policy>().LastOrDefault();
+        var protectedRoute = !metadata.OfType<IAllowAnonymous>().Any();
+        var unsafeMethod = context.Description.HttpMethod is not ("GET" or "HEAD" or "OPTIONS");
+        if (protectedRoute)
+        {
             (operation.Security ??= []).Add(new OpenApiSecurityRequirement { [new OpenApiSecuritySchemeReference("Bearer", context.Document)] = [] });
+            var cookie = new OpenApiSecurityRequirement { [new OpenApiSecuritySchemeReference("WebSession", context.Document)] = [] };
+            if (unsafeMethod) cookie[new OpenApiSecuritySchemeReference("WebCsrf", context.Document)] = [];
+            operation.Security.Add(cookie);
+        }
+        if (policy is not null)
+        {
+            operation.Description = (operation.Description is null ? "" : operation.Description + "\n\n") +
+                "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity.";
+            if (unsafeMethod)
+            {
+                operation.Description += " Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.";
+                operation.Parameters ??= [];
+                operation.Parameters.Add(new OpenApiParameter
+                {
+                    Name = "Origin", In = ParameterLocation.Header, Required = policy.WebLogin,
+                    Description = "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+                    Schema = new OpenApiSchema { Type = JsonSchemaType.String }
+                });
+                operation.Parameters.Add(new OpenApiParameter
+                {
+                    Name = "X-Shelf-CSRF", In = ParameterLocation.Header, Required = policy.WebLogin,
+                    Description = "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+                    Schema = new OpenApiSchema { Type = JsonSchemaType.String, Pattern = "^1$" }
+                });
+                if (policy.WebLogin)
+                    (operation.Security ??= []).Add(new OpenApiSecurityRequirement { [new OpenApiSecuritySchemeReference("WebCsrf", context.Document)] = [] });
+            }
+            operation.Responses ??= new();
+            operation.Responses.TryAdd("401", new OpenApiResponse { Description = "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted." });
+            if (unsafeMethod || protectedRoute)
+                operation.Responses.TryAdd("403", new OpenApiResponse { Description = "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request." });
+        }
         return Task.CompletedTask;
     });
 });

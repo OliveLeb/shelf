@@ -1,1 +1,6 @@
 @import '@shelf/ui/style.css';
+
+@theme {
+  /* Resolve the platform's text font before falling back to emoji glyphs on Linux. */
+  --font-sans: ui-sans-serif, system-ui, sans-serif;
+}
