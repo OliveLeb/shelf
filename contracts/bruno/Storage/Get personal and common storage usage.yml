@@ -38,5 +38,30 @@ examples:
             "personalBytes": "",
             "commonBytes": ""
           }
+  - name: 401 Response
+    description: Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted.
+    request:
+      url: "{{baseUrl}}/storage/usage"
+      method: GET
+    response:
+      status: 401
+      statusText: Unauthorized
+      body:
+        type: text
+        data: ""
+  - name: 403 Response
+    description: Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request.
+    request:
+      url: "{{baseUrl}}/storage/usage"
+      method: GET
+    response:
+      status: 403
+      statusText: Forbidden
+      body:
+        type: text
+        data: ""
 
-docs: Confirmed file bytes including trash, excluding pending uploads and thumbnails. No quota is applied.
+docs: |-
+  Confirmed file bytes including trash, excluding pending uploads and thumbnails. No quota is applied.
+
+  Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity.

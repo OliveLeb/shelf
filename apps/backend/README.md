@@ -11,7 +11,7 @@ Depuis la racine du dépôt :
 cp .env.example .env
 docker compose up -d --wait postgres minio
 export ConnectionStrings__Shelf='Host=localhost;Database=shelf;Username=shelf'
-export Authentication__ClientOrigin='http://localhost:3000'
+export Authentication__ClientOrigin='https://localhost:3000'
 # Configuration S3 : voir infra/README.md (MinIO en développement).
 dotnet restore apps/backend/Shelf.slnx
 dotnet run --project apps/backend/Shelf.Api --no-launch-profile -- migrate
@@ -21,6 +21,12 @@ dotnet run --project apps/backend/Shelf.Api --launch-profile http
 
 La commande `admin create` demande le mot de passe sans l’afficher.
 `GET http://localhost:5050/health` conserve son accès public.
+Le client web de développement utilise HTTPS sur le port 3000 et relaie `/api`
+vers cette API HTTP sur le port 5050. Le navigateur doit voir HTTPS pour le cookie
+`__Host-shelf-session` ; ne pas supprimer son attribut `Secure` pour développer.
+L’origine configurée est celle du navigateur, sans `/api` ni slash final, et non
+celle du backend. Les requêtes web mutantes, connexion comprise, envoient
+`Origin` et `X-Shelf-CSRF: 1`. Voir les [règles de transport](../../docs/authentication.md#transport-des-sessions-web-et-mobile).
 La connexion sans mot de passe ci-dessus est réservée au PostgreSQL Docker local,
 lié à l’interface loopback. En production, fournir une connexion PostgreSQL
 avec authentification et TLS depuis la configuration secrète du déploiement.

@@ -8,6 +8,15 @@ info:
 http:
   method: PUT
   url: "{{baseUrl}}/elements/:id/shares/:recipientId"
+  headers:
+    - name: Origin
+      value: ""
+      description: Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.
+      disabled: true
+    - name: X-Shelf-CSRF
+      value: ""
+      description: Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.
+      disabled: true
   params:
     - name: id
       value: ""
@@ -38,6 +47,15 @@ examples:
     request:
       url: "{{baseUrl}}/elements/:id/shares/:recipientId"
       method: PUT
+      headers:
+        - name: Origin
+          value: ""
+          description: Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.
+          disabled: true
+        - name: X-Shelf-CSRF
+          value: ""
+          description: Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.
+          disabled: true
       params:
         - name: id
           value: ""
@@ -68,5 +86,74 @@ examples:
             },
             "level": ""
           }
+  - name: 401 Response
+    description: Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted.
+    request:
+      url: "{{baseUrl}}/elements/:id/shares/:recipientId"
+      method: PUT
+      headers:
+        - name: Origin
+          value: ""
+          description: Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.
+          disabled: true
+        - name: X-Shelf-CSRF
+          value: ""
+          description: Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.
+          disabled: true
+      params:
+        - name: id
+          value: ""
+          type: path
+        - name: recipientId
+          value: ""
+          type: path
+      body:
+        type: json
+        data: |-
+          {
+            "level": ""
+          }
+    response:
+      status: 401
+      statusText: Unauthorized
+      body:
+        type: text
+        data: ""
+  - name: 403 Response
+    description: Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request.
+    request:
+      url: "{{baseUrl}}/elements/:id/shares/:recipientId"
+      method: PUT
+      headers:
+        - name: Origin
+          value: ""
+          description: Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.
+          disabled: true
+        - name: X-Shelf-CSRF
+          value: ""
+          description: Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.
+          disabled: true
+      params:
+        - name: id
+          value: ""
+          type: path
+        - name: recipientId
+          value: ""
+          type: path
+      body:
+        type: json
+        data: |-
+          {
+            "level": ""
+          }
+    response:
+      status: 403
+      statusText: Forbidden
+      body:
+        type: text
+        data: ""
 
-docs: Only the owner may grant read or write. Write permits editing contents, not renaming, moving or deleting a shared root. Overlapping grants use the highest level.
+docs: |-
+  Only the owner may grant read or write. Write permits editing contents, not renaming, moving or deleting a shared root. Overlapping grants use the highest level.
+
+  Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.

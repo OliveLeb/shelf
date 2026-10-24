@@ -17,6 +17,26 @@
           "Authentication"
         ],
         "summary": "Register with an invitation",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -37,6 +57,12 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         }
       }
@@ -47,6 +73,26 @@
           "Authentication"
         ],
         "summary": "Log in",
+        "description": "Mobile Bearer login. Returns the opaque token. With a web session cookie, rejects with 400 web_login_required after CSRF validation; use /auth/web/login instead.\n\nCookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -67,8 +113,89 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "429": {
+            "description": "Too Many Requests"
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         }
+      }
+    },
+    "/auth/web/login": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Log in on the web",
+        "description": "Returns Account only, never the token or session envelope. Sets __Host-shelf-session (HttpOnly; Secure; SameSite=Strict; Path=/; no Domain), expiring with the 30-day sliding inactivity window. A successful login atomically revokes any session identified by the previous web cookie, including on account switch.\n\nCookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "required": true,
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Login"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "429": {
+            "description": "Too Many Requests"
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
+          }
+        },
+        "security": [
+          {
+            "WebCsrf": [ ]
+          }
+        ]
       }
     },
     "/auth/reset-password": {
@@ -77,6 +204,26 @@
           "Authentication"
         ],
         "summary": "Reset password with a reset link",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -90,6 +237,12 @@
         "responses": {
           "204": {
             "description": "No Content"
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         }
       }
@@ -100,6 +253,7 @@
           "Account"
         ],
         "summary": "Get current account",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity.",
         "responses": {
           "200": {
             "description": "OK",
@@ -110,11 +264,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ]
           }
         ]
       },
@@ -123,6 +286,26 @@
           "Account"
         ],
         "summary": "Delete own account",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -136,11 +319,21 @@
         "responses": {
           "204": {
             "description": "No Content"
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ],
+            "WebCsrf": [ ]
           }
         ]
       }
@@ -151,6 +344,26 @@
           "Account"
         ],
         "summary": "Change username",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -171,11 +384,21 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ],
+            "WebCsrf": [ ]
           }
         ]
       }
@@ -186,6 +409,26 @@
           "Account"
         ],
         "summary": "Change email",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -206,11 +449,21 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ],
+            "WebCsrf": [ ]
           }
         ]
       }
@@ -221,6 +474,26 @@
           "Account"
         ],
         "summary": "Change password",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -234,11 +507,21 @@
         "responses": {
           "204": {
             "description": "No Content"
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ],
+            "WebCsrf": [ ]
           }
         ]
       }
@@ -249,6 +532,7 @@
           "Account"
         ],
         "summary": "List active sessions",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity.",
         "responses": {
           "200": {
             "description": "OK",
@@ -262,11 +546,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ]
           }
         ]
       },
@@ -275,14 +568,44 @@
           "Account"
         ],
         "summary": "Revoke all sessions",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "204": {
             "description": "No Content"
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ],
+            "WebCsrf": [ ]
           }
         ]
       }
@@ -293,6 +616,7 @@
           "Account"
         ],
         "summary": "Revoke a session",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
         "parameters": [
           {
             "name": "id",
@@ -302,16 +626,43 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "204": {
             "description": "No Content"
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ],
+            "WebCsrf": [ ]
           }
         ]
       }
@@ -322,14 +673,44 @@
           "Account"
         ],
         "summary": "Log out",
+        "description": "Revokes only the selected session. A web logout deletes the host-only session cookie with the same Secure, HttpOnly, SameSite and Path attributes.\n\nCookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "204": {
             "description": "No Content"
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ],
+            "WebCsrf": [ ]
           }
         ]
       }
@@ -340,6 +721,7 @@
           "Admin"
         ],
         "summary": "List accounts",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity.",
         "responses": {
           "200": {
             "description": "OK",
@@ -353,11 +735,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ]
           }
         ]
       }
@@ -368,6 +759,7 @@
           "Admin"
         ],
         "summary": "Disable an account",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
         "parameters": [
           {
             "name": "id",
@@ -377,16 +769,43 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "204": {
             "description": "No Content"
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ],
+            "WebCsrf": [ ]
           }
         ]
       }
@@ -397,6 +816,7 @@
           "Admin"
         ],
         "summary": "Delete an account",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
         "parameters": [
           {
             "name": "id",
@@ -406,16 +826,43 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "204": {
             "description": "No Content"
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ],
+            "WebCsrf": [ ]
           }
         ]
       }
@@ -426,6 +873,7 @@
           "Admin"
         ],
         "summary": "Create a password reset link",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
         "parameters": [
           {
             "name": "id",
@@ -434,6 +882,23 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
             }
           }
         ],
@@ -447,11 +912,21 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ],
+            "WebCsrf": [ ]
           }
         ]
       }
@@ -462,6 +937,26 @@
           "Admin"
         ],
         "summary": "Invite by email",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -482,11 +977,21 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ],
+            "WebCsrf": [ ]
           }
         ]
       },
@@ -495,6 +1000,7 @@
           "Admin"
         ],
         "summary": "List invitations",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity.",
         "responses": {
           "200": {
             "description": "OK",
@@ -508,11 +1014,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ]
           }
         ]
       }
@@ -523,6 +1038,7 @@
           "Admin"
         ],
         "summary": "Revoke an invitation",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
         "parameters": [
           {
             "name": "id",
@@ -532,16 +1048,43 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "204": {
             "description": "No Content"
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ],
+            "WebCsrf": [ ]
           }
         ]
       }
@@ -552,7 +1095,7 @@
           "Storage"
         ],
         "summary": "Search visible elements by name",
-        "description": "Case-insensitive literal substring (1–255 characters, not whitespace-only). Includes personal, common and received shared elements, without trash or duplicates.",
+        "description": "Case-insensitive literal substring (1–255 characters, not whitespace-only). Includes personal, common and received shared elements, without trash or duplicates.\n\nCookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity.",
         "parameters": [
           {
             "name": "query",
@@ -578,11 +1121,20 @@
           },
           "400": {
             "description": "Bad Request"
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ]
           }
         ]
       }
@@ -593,7 +1145,7 @@
           "Storage"
         ],
         "summary": "Get personal and common storage usage",
-        "description": "Confirmed file bytes including trash, excluding pending uploads and thumbnails. No quota is applied.",
+        "description": "Confirmed file bytes including trash, excluding pending uploads and thumbnails. No quota is applied.\n\nCookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity.",
         "responses": {
           "200": {
             "description": "OK",
@@ -604,11 +1156,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ]
           }
         ]
       }
@@ -619,7 +1180,7 @@
           "Storage"
         ],
         "summary": "Get storage usage per account",
-        "description": "Administrator only. Returns account identity and personal-space file bytes including trash, without content metadata. Includes empty and disabled accounts; excludes common-space bytes.",
+        "description": "Administrator only. Returns account identity and personal-space file bytes including trash, without content metadata. Includes empty and disabled accounts; excludes common-space bytes.\n\nCookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity.",
         "responses": {
           "200": {
             "description": "OK",
@@ -636,11 +1197,17 @@
           },
           "403": {
             "description": "Forbidden"
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ]
           }
         ]
       }
@@ -651,6 +1218,7 @@
           "Storage"
         ],
         "summary": "List elements shared with me",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity.",
         "responses": {
           "200": {
             "description": "OK",
@@ -664,11 +1232,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ]
           }
         ]
       }
@@ -679,6 +1256,7 @@
           "Storage"
         ],
         "summary": "List an element's shares",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity.",
         "parameters": [
           {
             "name": "id",
@@ -703,11 +1281,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ]
           }
         ]
       }
@@ -718,7 +1305,7 @@
           "Storage"
         ],
         "summary": "Set a share's level",
-        "description": "Only the owner may grant read or write. Write permits editing contents, not renaming, moving or deleting a shared root. Overlapping grants use the highest level.",
+        "description": "Only the owner may grant read or write. Write permits editing contents, not renaming, moving or deleting a shared root. Overlapping grants use the highest level.\n\nCookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
         "parameters": [
           {
             "name": "id",
@@ -736,6 +1323,23 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
             }
           }
         ],
@@ -759,11 +1363,21 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ],
+            "WebCsrf": [ ]
           }
         ]
       },
@@ -772,6 +1386,7 @@
           "Storage"
         ],
         "summary": "Remove a share",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
         "parameters": [
           {
             "name": "id",
@@ -790,16 +1405,43 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "204": {
             "description": "No Content"
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ],
+            "WebCsrf": [ ]
           }
         ]
       }
@@ -810,6 +1452,7 @@
           "Storage"
         ],
         "summary": "List the personal space root",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity.",
         "parameters": [
           {
             "name": "sort",
@@ -839,11 +1482,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ]
           }
         ]
       }
@@ -854,6 +1506,7 @@
           "Storage"
         ],
         "summary": "List the common space root",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity.",
         "parameters": [
           {
             "name": "sort",
@@ -883,11 +1536,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ]
           }
         ]
       }
@@ -898,6 +1560,7 @@
           "Storage"
         ],
         "summary": "Resume an upload",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity.",
         "parameters": [
           {
             "name": "id",
@@ -919,11 +1582,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ]
           }
         ]
       }
@@ -934,7 +1606,26 @@
           "Storage"
         ],
         "summary": "Declare an upload",
-        "description": "Requires write access to the destination. To replace a specific writable file, including a shared file with a hidden parent, send replaceFileId, size and contentType without name, parentId, space or onConflict. Old content goes to the owner's trash at confirmation.",
+        "description": "Requires write access to the destination. To replace a specific writable file, including a shared file with a hidden parent, send replaceFileId, size and contentType without name, parentId, space or onConflict. Old content goes to the owner's trash at confirmation.\n\nCookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -955,11 +1646,21 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ],
+            "WebCsrf": [ ]
           }
         ]
       }
@@ -970,7 +1671,7 @@
           "Storage"
         ],
         "summary": "Complete an upload",
-        "description": "Rechecks write access and uploaded size, then conditionally copies the validated object to a private final key. Replaying an upload URL cannot modify confirmed content. A concurrent content change returns 409 source_changed; resend and retry confirmation. A targeted replacement preserves file identity and shares; revoked, read-only or trashed targets cannot be replaced.",
+        "description": "Rechecks write access and uploaded size, then conditionally copies the validated object to a private final key. Replaying an upload URL cannot modify confirmed content. A concurrent content change returns 409 source_changed; resend and retry confirmation. A targeted replacement preserves file identity and shares; revoked, read-only or trashed targets cannot be replaced.\n\nCookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
         "parameters": [
           {
             "name": "id",
@@ -979,6 +1680,23 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
             }
           }
         ],
@@ -995,11 +1713,21 @@
           },
           "409": {
             "description": "Conflict"
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ],
+            "WebCsrf": [ ]
           }
         ]
       }
@@ -1010,6 +1738,7 @@
           "Storage"
         ],
         "summary": "Get a download link",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity.",
         "parameters": [
           {
             "name": "id",
@@ -1031,11 +1760,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ]
           }
         ]
       }
@@ -1046,7 +1784,7 @@
           "Storage"
         ],
         "summary": "Get a miniature state and link",
-        "description": "Uses the file's read access. Link is null while pending or unavailable; generation failure never prevents downloading the file.",
+        "description": "Uses the file's read access. Link is null while pending or unavailable; generation failure never prevents downloading the file.\n\nCookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity.",
         "parameters": [
           {
             "name": "id",
@@ -1068,11 +1806,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ]
           }
         ]
       }
@@ -1083,7 +1830,7 @@
           "Storage"
         ],
         "summary": "Get a video streaming link",
-        "description": "Inline signed GET of the original video, with native S3 Range support and no transcoding. Request a fresh link after expiry; unsupported codecs remain downloadable.",
+        "description": "Inline signed GET of the original video, with native S3 Range support and no transcoding. Request a fresh link after expiry; unsupported codecs remain downloadable.\n\nCookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity.",
         "parameters": [
           {
             "name": "id",
@@ -1105,11 +1852,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ]
           }
         ]
       }
@@ -1120,6 +1876,7 @@
           "Storage"
         ],
         "summary": "List a folder",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity.",
         "parameters": [
           {
             "name": "id",
@@ -1158,11 +1915,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ]
           }
         ]
       }
@@ -1173,6 +1939,26 @@
           "Storage"
         ],
         "summary": "Create a folder",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -1193,11 +1979,21 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ],
+            "WebCsrf": [ ]
           }
         ]
       }
@@ -1208,6 +2004,7 @@
           "Storage"
         ],
         "summary": "Rename an element",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
         "parameters": [
           {
             "name": "id",
@@ -1216,6 +2013,23 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
             }
           }
         ],
@@ -1239,11 +2053,21 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ],
+            "WebCsrf": [ ]
           }
         ]
       }
@@ -1254,6 +2078,7 @@
           "Storage"
         ],
         "summary": "Move an element",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
         "parameters": [
           {
             "name": "id",
@@ -1262,6 +2087,23 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
             }
           }
         ],
@@ -1285,11 +2127,21 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ],
+            "WebCsrf": [ ]
           }
         ]
       }
@@ -1300,6 +2152,7 @@
           "Storage"
         ],
         "summary": "Copy an element",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
         "parameters": [
           {
             "name": "id",
@@ -1308,6 +2161,23 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
             }
           }
         ],
@@ -1331,11 +2201,21 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ],
+            "WebCsrf": [ ]
           }
         ]
       }
@@ -1346,6 +2226,7 @@
           "Storage"
         ],
         "summary": "Move an element to its space trash",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
         "parameters": [
           {
             "name": "id",
@@ -1355,16 +2236,43 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "204": {
             "description": "No Content"
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ],
+            "WebCsrf": [ ]
           }
         ]
       }
@@ -1375,6 +2283,7 @@
           "Storage"
         ],
         "summary": "List a space trash",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity.",
         "parameters": [
           {
             "name": "space",
@@ -1398,11 +2307,20 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ]
           }
         ]
       },
@@ -1411,6 +2329,7 @@
           "Storage"
         ],
         "summary": "Empty a space trash",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
         "parameters": [
           {
             "name": "space",
@@ -1419,16 +2338,43 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "204": {
             "description": "No Content"
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ],
+            "WebCsrf": [ ]
           }
         ]
       }
@@ -1439,6 +2385,7 @@
           "Storage"
         ],
         "summary": "Restore a trashed element",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
         "parameters": [
           {
             "name": "id",
@@ -1447,6 +2394,23 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
             }
           }
         ],
@@ -1460,11 +2424,21 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ],
+            "WebCsrf": [ ]
           }
         ]
       }
@@ -1475,6 +2449,7 @@
           "Storage"
         ],
         "summary": "Permanently purge a trashed element",
+        "description": "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity. Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.",
         "parameters": [
           {
             "name": "id",
@@ -1484,16 +2459,43 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "description": "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Shelf-CSRF",
+            "in": "header",
+            "description": "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+            "schema": {
+              "pattern": "^1$",
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "204": {
             "description": "No Content"
+          },
+          "401": {
+            "description": "Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted."
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
           }
         },
         "security": [
           {
             "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ],
+            "WebCsrf": [ ]
           }
         ]
       }
@@ -2292,6 +3294,18 @@
       "Bearer": {
         "type": "http",
         "scheme": "bearer"
+      },
+      "WebSession": {
+        "type": "apiKey",
+        "description": "Persistent HttpOnly Secure SameSite=Strict host-only cookie, Path=/. Never combine with Authorization.",
+        "name": "__Host-shelf-session",
+        "in": "cookie"
+      },
+      "WebCsrf": {
+        "type": "apiKey",
+        "description": "Value must be exactly 1. Web unsafe requests also require Origin exactly equal to Authentication:ClientOrigin; no permissive CORS is provided.",
+        "name": "X-Shelf-CSRF",
+        "in": "header"
       }
     }
   },

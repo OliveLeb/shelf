@@ -1,0 +1,31 @@
+{
+  "name": "@shelf/web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vp dev",
+    "build": "vp build",
+    "preview": "vp preview",
+    "test": "vp test --passWithNoTests"
+  },
+  "dependencies": {
+    "@nuxt/ui": "catalog:",
+    "@shelf/ui": "workspace:*",
+    "pinia": "catalog:",
+    "tailwindcss": "catalog:",
+    "vue": "catalog:",
+    "vue-router": "catalog:"
+  },
+  "devDependencies": {
+    "@iconify-json/lucide": "catalog:",
+    "@vitejs/plugin-basic-ssl": "catalog:",
+    "@vitejs/plugin-vue": "catalog:",
+    "@vue/test-utils": "catalog:",
+    "@vue/tsconfig": "catalog:",
+    "happy-dom": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plus": "catalog:",
+    "vue-tsc": "catalog:"
+  }
+}

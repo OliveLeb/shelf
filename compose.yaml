@@ -34,6 +34,34 @@ services:
     volumes:
       - minio_data:/data
 
+  # Node.js toolchain for apps/web, apps/mobile and packages/* (profile "front").
+  # One-off commands: docker compose run --rm node pnpm install
+  node: &node
+    profiles: [front]
+    build: infra/node
+    image: shelf-node:dev
+    volumes:
+      - .:/workspace
+      - node_cache:/home/node/.cache
+    command: pnpm install
+
+  web:
+    <<: *node
+    command: pnpm --filter @shelf/web dev --host 0.0.0.0
+    environment:
+      SHELF_API_TARGET: http://host.docker.internal:5050
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    ports:
+      - "127.0.0.1:3000:3000"
+
+  mobile:
+    <<: *node
+    command: pnpm --filter @shelf/mobile dev --host 0.0.0.0
+    ports:
+      - "127.0.0.1:3001:3001"
+
 volumes:
   postgres_data:
   minio_data:
+  node_cache:

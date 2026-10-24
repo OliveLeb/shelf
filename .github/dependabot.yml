@@ -7,3 +7,15 @@ updates:
     groups:
       github-actions:
         patterns: ['*']
+  # One grouped PR keeps vite-plus and its `vite` alias on matching versions.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      frontend:
+        patterns: ['*']
+  - package-ecosystem: docker
+    directory: /infra/node
+    schedule:
+      interval: weekly

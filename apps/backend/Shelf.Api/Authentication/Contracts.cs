@@ -17,7 +17,7 @@ public sealed record ResetPassword(string? Token, string? Password);
 public sealed record InvitationLink(Guid Id, string Email, DateTimeOffset ExpiresAt, string Link);
 public sealed record ResetLink(DateTimeOffset ExpiresAt, string Link);
 public sealed record LoginResult(Account Account, Guid SessionId, string Token, DateTimeOffset ExpiresAt);
-public sealed record Actor(Account Account, Guid SessionId);
+public sealed record Actor(Account Account, Guid SessionId, DateTimeOffset ExpiresAt);
 
 public sealed class AuthError(int status, string code) : Exception(code)
 {

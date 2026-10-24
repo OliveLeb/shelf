@@ -1,7 +1,8 @@
 # Authentification et comptes
 
-Implémente [l’issue #1](https://github.com/OliveLeb/shelf/issues/1).
-Cette livraison fournit uniquement le backend ; aucun email n’est envoyé.
+Implémente [l’issue #1](https://github.com/OliveLeb/shelf/issues/1) et le transport
+web persistant de [l’issue #44](https://github.com/OliveLeb/shelf/issues/44).
+Aucun email n’est envoyé.
 
 ## Configuration et migrations
 
@@ -11,7 +12,7 @@ Les variables d’environnement suivantes remplacent les valeurs de configuratio
 | Variable | Usage |
 | --- | --- |
 | `ConnectionStrings__Shelf` | Connexion Npgsql, obligatoire pour les opérations de compte |
-| `Authentication__ClientOrigin` | Origine HTTP(S) des futurs clients, obligatoire au démarrage HTTP ; sans chemin, query, identifiants ou fragment |
+| `Authentication__ClientOrigin` | Origine du navigateur, obligatoire au démarrage HTTP ; sans chemin, query, identifiants ou fragment ; un slash final est normalisé ; HTTPS pour le web |
 | `Authentication__PublicPermitLimit` | Requêtes publiques par IP et fenêtre ; défaut 10 |
 | `Authentication__PublicWindowSeconds` | Durée de fenêtre en secondes ; défaut 60 |
 | `ASPNETCORE_URLS` | Adresse d’écoute HTTP standard ASP.NET Core |
@@ -25,13 +26,13 @@ modifier une migration déjà déployée. Sauvegarder la base avant une mise à 
 
 En production, terminer TLS sur le serveur ou un proxy de confiance. Ne pas
 journaliser les corps d’authentification, les réponses de génération de liens,
-les en-têtes Authorization ou la configuration PostgreSQL. Les logs applicatifs
+les en-têtes Authorization, Cookie ou Set-Cookie, ni la configuration PostgreSQL. Les logs applicatifs
 standards ne contiennent pas ces secrets. Ne pas activer la journalisation des
 paramètres Npgsql ou des corps HTTP. Garder la limite de corps à 16 Kio aussi au
 niveau du proxy. Les liens sont construits exclusivement depuis l’origine
 configurée ; l’en-tête Host ne la remplace jamais.
 
-La limitation est commune aux trois opérations publiques, par IP de connexion,
+La limitation est commune aux opérations publiques d’authentification, par IP de connexion,
 et locale à chaque processus API. Derrière un proxy, sans configuration explicite
 des proxys de confiance, son IP partage cette limite entre clients. Pour plusieurs
 réplicas ou une exposition publique, appliquer également une limite partagée au
@@ -67,23 +68,95 @@ Aucun endpoint HTTP n’attribue ou ne retire le rôle administrateur.
 
 ## Transport des sessions web et mobile
 
-`POST /auth/login` retourne un secret opaque de 256 bits, l’UUID de session,
-son expiration et le compte. Fournir ensuite `Authorization: Bearer <token>` à
-chaque requête protégée. Chaque connexion crée une session indépendante.
-La base conserve uniquement l’empreinte SHA-256 du secret. Il n’y a aucun cookie
-d’authentification et les cookies ne sont jamais utilisés pour authentifier.
-Aucune protection CSRF fondée sur les cookies n’est donc nécessaire pour ce contrat.
+Les deux transports réutilisent les mêmes sessions opaques de 256 bits ; la base
+ne conserve que l’empreinte SHA-256 du secret. Aucun JWT ou second registre de
+sessions n’est ajouté. Le rôle administrateur ne donne aucun accès supplémentaire
+aux espaces personnels des autres comptes, quel que soit le transport.
 
-Le futur client web conserve le secret en mémoire et ajoute explicitement
-l’en-tête ; une persistance éventuelle doit être conçue avec la protection XSS du
-client. Le mobile utilise le stockage sécurisé du système. Ne pas placer ces
-secrets dans les URL. Les réponses des opérations de compte utilisent `no-store`.
+### Mobile : Bearer inchangé
 
-Chaque requête protégée réussie vérifie la session et le statut actuel du compte
-en base, puis renouvelle l’expiration à trente jours. Une expiration atteinte
-rend la session inutilisable ; seule une nouvelle connexion peut la remplacer.
-Une révocation, désactivation ou suppression prend effet dès la requête protégée
-suivante. Les sessions expirées ne figurent plus dans la liste des sessions actives.
+`POST /auth/login` reçoit `Login` et retourne `{account, sessionId, token, expiresAt}`.
+Le mobile conserve le secret dans le stockage sécurisé du système, puis fournit
+`Authorization: Bearer <token>` à chaque requête protégée. Sans cookie web, il
+n’a pas à fournir les en-têtes CSRF. Chaque connexion mobile reste indépendante.
+Si un cookie web accompagne `/auth/login`, le serveur exige d’abord les en-têtes
+web ci-dessous, puis refuse avec `400 web_login_required` : cette route ne doit
+pas permettre au navigateur de récupérer le secret dans du JSON.
+
+### Web : cookie persistant
+
+`POST /auth/web/login` reçoit le même JSON `Login`, mais ne retourne que le compte
+(`id`, `username`, `email`, `isAdmin`, `isActive`), sans enveloppe, jeton ou UUID de
+session. Le secret est envoyé uniquement dans `Set-Cookie` :
+
+```http
+Set-Cookie: __Host-shelf-session=<opaque>; expires=<UTC>; path=/; secure; samesite=strict; httponly
+```
+
+Le cookie est persistant, host-only, sans `Domain` ; le préfixe `__Host-` impose
+`Secure` et `Path=/`. JavaScript ne doit ni lire le secret, ni le copier dans
+localStorage/sessionStorage. Les requêtes de compte **et de stockage** acceptent
+ce cookie à la place du Bearer. Une connexion web réussie remplace atomiquement
+la session de l’ancien cookie, même si le compte change ; les autres appareils
+restent connectés. Un cookie expiré ou déjà révoqué n’empêche pas une nouvelle
+connexion. Un échec de connexion ne crée pas de session et ne révoque pas l’ancienne.
+
+La présence simultanée du cookie et d’`Authorization` est toujours rejetée avec
+`401 ambiguous_credentials`, même si l’un est invalide ou le cookie vide : aucun
+transport n’a priorité et aucune tentative ne retombe sur l’autre. Un cookie seul
+invalide donne `401 authentication_required`. Les `401` avec cookie le suppriment
+avec les mêmes attributs de sécurité et une expiration passée. Un logout web
+réussi révoque uniquement sa session et supprime également le cookie.
+
+### CSRF et déploiement HTTPS
+
+Toute requête web non sûre (`POST`, `PUT`, `PATCH`, `DELETE`), sur les opérations
+d’authentification, de compte, d’administration et de stockage, doit fournir :
+
+```http
+Origin: https://shelf.example.test
+X-Shelf-CSRF: 1
+```
+
+L’origine doit être **exactement** l’origine normalisée depuis
+`Authentication__ClientOrigin` (schéma, hôte et port, sans slash final) ; une origine absente, `null`, étrangère, avec
+slash final ou plusieurs valeurs est refusée. L’en-tête CSRF doit être unique et
+valoir exactement `1`. Sinon : `403 csrf_rejected`, avant le traitement du JSON
+et toute mutation. Cette règle s’applique **toujours à `/auth/web/login`**, même
+sans cookie, et aux autres opérations non sûres dès qu’un cookie web est présent.
+Les lectures `GET` ne demandent pas ces en-têtes.
+
+L’en-tête personnalisé + l’origine exacte, avec **aucun CORS permissif sur l’API**,
+constituent volontairement la défense CSRF ; `SameSite=Strict` est une protection
+supplémentaire, pas son remplacement. Ne pas ajouter de CORS autorisant des
+origines arbitraires ou reflétant `Origin`. Le CORS S3 pour les transferts directs
+est distinct et ne transporte pas le cookie de l’API.
+
+Servir le web et son proxy `/api` sous la même origine HTTPS. Le proxy retire le
+préfixe `/api` pour l’API et conserve `Origin`, `Cookie` et `Set-Cookie` **sans
+réécrire Domain ou Path**. L’API interne peut rester HTTP loopback derrière un
+proxy TLS de confiance : `Secure` reste toujours émis, indépendamment du schéma
+de la connexion interne. Ne pas exposer ce port HTTP directement sur Internet.
+Configurer l’origine publique HTTPS du navigateur (pas l’adresse interne de
+l’API). En développement : `https://localhost:3000`, avec certificat de confiance
+et proxy vers le port API 5050. Ne pas désactiver `Secure` pour contourner HTTPS.
+N’accepter des en-têtes Forwarded que de proxys explicitement approuvés si leur
+prise en charge est ajoutée ; le contrat CSRF ne déduit jamais l’origine depuis Host.
+
+### Expiration et activité
+
+Chaque requête protégée vérifie la session et le statut actuel du compte en base.
+La fenêtre d’inactivité reste de trente jours, borne exclue. Après une activité
+authentifiée réussie, le cookie est réémis avec l’expiration réelle de la session
+en base ; les réponses de refus ne le renouvellent pas. Le stockage conserve ses
+deux transactions : activité validée avant l’opération longue, puis revalidation
+et verrouillage des droits jusqu’au commit ; un échec de stockage peut donc avoir
+mis à jour l’activité en base, mais n’allonge pas le cookie du navigateur.
+Une expiration atteinte rend la session inutilisable ; seule une nouvelle
+connexion peut la remplacer. Une révocation, désactivation ou suppression prend
+effet dès la requête protégée suivante. Les sessions expirées ne figurent plus
+dans la liste des sessions actives. Les réponses de compte et stockage utilisent
+`Cache-Control: no-store`. Ne jamais placer les secrets dans les URL.
 
 ## Contrat HTTP
 
@@ -104,6 +177,7 @@ compte entre 12 et 1024 caractères. L’ID du compte ne change jamais.
 | `GET /health` | Public | — | 200, santé du processus |
 | `POST /auth/register` | Public limité | `token`, `username`, `password` | 201, compte ordinaire ; email imposé par invitation |
 | `POST /auth/login` | Public limité | `identifier` (username ou email), `password`, `deviceName` facultatif (200 caractères max) | 200, `{account, sessionId, token, expiresAt}` |
+| `POST /auth/web/login` | Public limité + en-têtes web | même `Login` | 200, compte seulement + cookie persistant |
 | `POST /auth/reset-password` | Public limité | `token`, `password` | 204 ; toutes les sessions révoquées |
 | `POST /auth/logout` | Utilisateur | — | 204 ; session courante révoquée |
 | `GET /account` | Utilisateur | — | 200, compte courant |

@@ -43,6 +43,17 @@ examples:
               "bytes": ""
             }
           ]
+  - name: 401 Response
+    description: Invalid/expired/revoked session or credentials, or mixed cookie and Authorization. Rejected web cookies are deleted.
+    request:
+      url: "{{baseUrl}}/admin/storage/usage"
+      method: GET
+    response:
+      status: 401
+      statusText: Unauthorized
+      body:
+        type: text
+        data: ""
   - name: 403 Response
     description: Forbidden
     request:
@@ -55,4 +66,7 @@ examples:
         type: text
         data: ""
 
-docs: Administrator only. Returns account identity and personal-space file bytes including trash, without content metadata. Includes empty and disabled accounts; excludes common-space bytes.
+docs: |-
+  Administrator only. Returns account identity and personal-space file bytes including trash, without content metadata. Includes empty and disabled accounts; excludes common-space bytes.
+
+  Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity.

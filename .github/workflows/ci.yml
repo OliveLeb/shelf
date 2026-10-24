@@ -130,3 +130,52 @@ jobs:
       - name: Report documentation-only change
         if: steps.scope.outputs.backend == 'false'
         run: echo 'No backend or CI changes; expensive checks skipped.' >> "$GITHUB_STEP_SUMMARY"
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      # Keep this job present on every PR so a required check never stays pending.
+      - name: Detect frontend changes
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+        run: bash .github/scripts/ci-scope.sh
+
+      # Same Node.js version as the infra/node development image.
+      - name: Set up Node.js
+        if: steps.scope.outputs.frontend == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+
+      - name: Install locked dependencies
+        if: steps.scope.outputs.frontend == 'true'
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+
+      - name: Format, lint, build and type-check
+        if: steps.scope.outputs.frontend == 'true'
+        run: pnpm check
+
+      - name: Run unit tests
+        if: steps.scope.outputs.frontend == 'true'
+        run: pnpm test
+
+      - name: Report skipped frontend checks
+        if: steps.scope.outputs.frontend == 'false'
+        run: echo 'No frontend or CI changes; frontend checks skipped.' >> "$GITHUB_STEP_SUMMARY"
