@@ -90,5 +90,15 @@ public static class HttpEndpoints
         api.MapPost("/trash/{id:guid}/restore", async (Guid id, HttpContext h) => Results.Ok(await Db(h).Restore(Current(h), id))).Produces<Element>().WithSummary("Restore a trashed element");
         api.MapDelete("/trash/{id:guid}", async (Guid id, HttpContext h) => { await Db(h).Purge(Current(h), id); return Results.NoContent(); }).Produces(204).WithSummary("Permanently purge a trashed element");
         api.MapDelete("/spaces/{space}/trash", async (string space, HttpContext h) => { await Db(h).EmptyTrash(Current(h), space); return Results.NoContent(); }).Produces(204).WithSummary("Empty a space trash");
+        api.MapGet("/spaces/{space}/browse", async (string space, Guid? folderId, string? sort, string? order, HttpContext h, CancellationToken cancellationToken) =>
+            TypedResults.Ok(await Db(h).Browse(Current(h), space, folderId, sort, order)))
+            .WithSummary("Browse a personal or common folder")
+            .WithDescription("Returns the folder context and children with capabilities, folders first. Space is personal (owned by the account) or common. Omit folderId for the root. Sort is name (default), addedAt or size; order is asc (default) or desc. No server-side filtering.")
+            .Produces(400).Produces(401).Produces(404);
+        api.MapGet("/elements/{id:guid}/context", async (Guid id, HttpContext h, CancellationToken cancellationToken) =>
+            TypedResults.Ok(await Db(h).Context(Current(h), id)))
+            .WithSummary("Get a visible element's context")
+            .WithDescription("Returns a file or folder, authorized ancestors root-first excluding itself, its personal/common/shared space and capabilities. Inaccessible parents are omitted, including parentId. Missing, trashed and unauthorized elements return 404.")
+            .Produces(401).Produces(404);
     }
 }

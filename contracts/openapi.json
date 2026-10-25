@@ -2499,6 +2499,128 @@
           }
         ]
       }
+    },
+    "/spaces/{space}/browse": {
+      "get": {
+        "tags": [
+          "Storage"
+        ],
+        "summary": "Browse a personal or common folder",
+        "description": "Returns the folder context and children with capabilities, folders first. Space is personal (owned by the account) or common. Omit folderId for the root. Sort is name (default), addedAt or size; order is asc (default) or desc. No server-side filtering.\n\nCookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity.",
+        "parameters": [
+          {
+            "name": "space",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "folderId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowseResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ]
+          }
+        ]
+      }
+    },
+    "/elements/{id}/context": {
+      "get": {
+        "tags": [
+          "Storage"
+        ],
+        "summary": "Get a visible element's context",
+        "description": "Returns a file or folder, authorized ancestors root-first excluding itself, its personal/common/shared space and capabilities. Inaccessible parents are omitted, including parentId. Missing, trashed and unauthorized elements return 404.\n\nCookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ElementContext"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "403": {
+            "description": "Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request."
+          }
+        },
+        "security": [
+          {
+            "Bearer": [ ]
+          },
+          {
+            "WebSession": [ ]
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -2564,6 +2686,24 @@
           },
           "username": {
             "type": "string"
+          }
+        }
+      },
+      "BrowseResult": {
+        "required": [
+          "context",
+          "entries"
+        ],
+        "type": "object",
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/ElementContext"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ElementEntry"
+            }
           }
         }
       },
@@ -2650,6 +2790,116 @@
               "null",
               "string"
             ]
+          }
+        }
+      },
+      "ElementAncestor": {
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "ElementCapabilities": {
+        "required": [
+          "canDownload",
+          "canAdd",
+          "canRename",
+          "canMove",
+          "canTrash",
+          "canShare",
+          "canCopy"
+        ],
+        "type": "object",
+        "properties": {
+          "canDownload": {
+            "type": "boolean"
+          },
+          "canAdd": {
+            "type": "boolean"
+          },
+          "canRename": {
+            "type": "boolean"
+          },
+          "canMove": {
+            "type": "boolean"
+          },
+          "canTrash": {
+            "type": "boolean"
+          },
+          "canShare": {
+            "type": "boolean"
+          },
+          "canCopy": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ElementContext": {
+        "required": [
+          "space",
+          "element",
+          "ancestors",
+          "capabilities"
+        ],
+        "type": "object",
+        "properties": {
+          "space": {
+            "$ref": "#/components/schemas/ElementSpace"
+          },
+          "element": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Element"
+              }
+            ]
+          },
+          "ancestors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ElementAncestor"
+            }
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/ElementCapabilities"
+          }
+        }
+      },
+      "ElementEntry": {
+        "required": [
+          "element",
+          "capabilities"
+        ],
+        "type": "object",
+        "properties": {
+          "element": {
+            "$ref": "#/components/schemas/Element"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/ElementCapabilities"
+          }
+        }
+      },
+      "ElementSpace": {
+        "required": [
+          "kind"
+        ],
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
           }
         }
       },

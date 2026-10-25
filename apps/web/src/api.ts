@@ -3,6 +3,7 @@ export class ApiError extends Error {
     public status: number,
     public version: string | null,
     options?: ErrorOptions,
+    public code?: string,
   ) {
     super(`HTTP ${status}`, options)
   }
@@ -41,7 +42,14 @@ export async function api<T>(
           ...options.headers,
         },
       })
-      if (!response.ok) throw new ApiError(response.status, version)
+      if (!response.ok) {
+        const body: unknown = await response.json().catch(() => null)
+        const code =
+          body && typeof body === 'object' && 'error' in body && typeof body.error === 'string'
+            ? body.error
+            : undefined
+        throw new ApiError(response.status, version, undefined, code)
+      }
       const value: T = response.status === 204 ? undefined : await response.json()
       return { value, version }
     } catch (error) {

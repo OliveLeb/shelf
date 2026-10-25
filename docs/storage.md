@@ -63,6 +63,8 @@ JSON avec `Cache-Control: no-store` et signalent les erreurs par
 | `GET /spaces/personal/elements?sort=&order=` | — | 200, éléments de la racine de son espace personnel |
 | `GET /spaces/common/elements?sort=&order=` | — | 200, éléments de la racine de l’espace commun |
 | `GET /folders/{id}/elements?sort=&order=` | — | 200, éléments du dossier |
+| `GET /spaces/{space}/browse?folderId=&sort=&order=` | — | 200, `{context, entries}` du dossier ou de la racine de son espace `personal` ou de l’espace `common` |
+| `GET /elements/{id}/context` | — | 200, contexte autorisé d’un fichier ou dossier visible |
 | `GET /elements/search?query=` | — | 200, éléments visibles dont le nom contient `query`, hors corbeille |
 | `GET /storage/usage` | — | 200, `{personalBytes, commonBytes}`, corbeille comprise |
 | `GET /admin/storage/usage` | — | 200, liste de `{account: {id, username}, bytes}`, réservée aux administrateurs |
@@ -91,6 +93,30 @@ Un élément contient `id`, `kind` (`file` ou `folder`), `name`, `parentId`
 et `addedBy` (`{id, username}`, ou `null` si le compte n’existe plus).
 `thumbnailState` indique `pending`, `available` ou `unavailable` pour un fichier,
 et vaut `null` pour un dossier, y compris dans les partages et la corbeille.
+
+### Contexte de navigation
+
+`browse` renvoie le contexte courant et les enfants immédiats, chaque entrée
+associant `element` et `capabilities`. Le contexte contient `space.kind`
+(`personal`, `common` ou `shared`, relativement au compte courant), `element`
+(`null` à la racine), `ancestors` (`{id, name}`, du premier ancêtre autorisé au
+parent, sans l’élément courant) et `capabilities`. Un parent non autorisé n’est
+pas exposé, ni par son nom ni par `element.parentId`, qui vaut alors `null`.
+L’accès direct ne dépend donc pas des pages précédemment visitées.
+
+Les capacités `canDownload`, `canAdd`, `canRename`, `canMove`, `canTrash`,
+`canShare` et `canCopy` décrivent les opérations actuellement permises. Elles
+ne remplacent jamais les contrôles lors de l’action. Une racine d’espace ne
+permet que l’ajout. Les racines partagées restent protégées contre le renommage,
+le déplacement et la mise à la corbeille ; un conteneur comprenant une racine
+protégée ne peut pas non plus être déplacé ou mis à la corbeille par un destinataire.
+
+`/spaces/personal/browse` ne parcourt que l’espace propre au compte, même si
+un dossier d’un autre propriétaire est partagé avec lui. Le contexte générique
+prépare les autres espaces sans ajouter leurs écrans web. Les tris et l’ordre
+suivent les listes existantes ; aucun filtre serveur ou recherche récursive
+n’est introduit. Un élément absent, interdit ou en corbeille renvoie `404`
+sans révéler de contexte privé, administrateur compris.
 
 ### Recherche et volume occupé
 
