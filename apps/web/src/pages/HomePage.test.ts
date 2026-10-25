@@ -183,3 +183,167 @@ it('revalidates the whole folder after a child disappears and hides its other st
   expect(page.text()).not.toContain(file.name)
   expect(page.text()).not.toContain(sibling.name)
 })
+
+function button(text: string, root: ParentNode = document) {
+  const found = Array.from(root.querySelectorAll('button')).find(
+    (element) => element.textContent?.trim() === text,
+  )
+  expect(found, `button ${text}`).toBeDefined()
+  return found!
+}
+
+it('creates in the current folder only after confirmation and keeps rename conflicts visible', async () => {
+  let created = false
+  let creation: unknown
+  let confirm: (response: Response) => void = () => {}
+  vi.stubGlobal('fetch', async (path: string, options: RequestInit) => {
+    if (path === '/api/folders') {
+      creation = JSON.parse(String(options.body))
+      const response = await new Promise<Response>((resolve) => {
+        confirm = resolve
+      })
+      created = true
+      return response
+    }
+    if (path.endsWith('/rename')) return Response.json({ error: 'name_conflict' }, { status: 409 })
+    return Response.json(
+      browse(created ? [{ ...folder, id: 'created', name: 'Voyages' }, file] : [file], folder),
+    )
+  })
+  const { page } = await open('/dossiers/folder-1')
+  page
+    .findAll('button')
+    .find((element) => element.text() === 'Nouveau dossier')!
+    .element.click()
+  await flushPromises()
+  const dialog = document.querySelector('[role="dialog"]')!
+  const input = dialog.querySelector('input')!
+  input.value = 'Voyages'
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+  button('Créer', dialog).click()
+  await flushPromises()
+  expect(creation).toEqual({ name: 'Voyages', parentId: folder.id, space: 'personal' })
+  expect(page.text()).not.toContain('Voyages')
+  confirm(Response.json({ ...folder, id: 'created', name: 'Voyages' }, { status: 201 }))
+  await flushPromises()
+  expect(page.text()).toContain('Voyages')
+  await page.get('input[aria-label="Sélectionner Lettre.txt"]').setValue(true)
+  page
+    .findAll('button')
+    .find((element) => element.text() === 'Renommer')!
+    .element.click()
+  await flushPromises()
+  const rename = document.querySelector('[role="dialog"]')!
+  const name = rename.querySelector('input')!
+  name.value = 'Voyages'
+  name.dispatchEvent(new Event('input', { bubbles: true }))
+  button('Enregistrer', rename).click()
+  await flushPromises()
+  expect(rename.querySelector('[role="alert"]')?.textContent).toContain('existe déjà')
+  expect(name.value).toBe('Voyages')
+  expect(page.text()).toContain('Lettre.txt')
+})
+
+it('reports partial moves per element and retries only confirmed failures, never successes or unknown writes', async () => {
+  const second = { ...file, id: 'file-2', name: 'Journal.txt' }
+  const third = { ...file, id: 'file-3', name: 'Brouillon.txt' }
+  const moved: string[] = []
+  const destinations: unknown[] = []
+  let retry = false
+  vi.stubGlobal('fetch', async (path: string, options: RequestInit) => {
+    if (path.endsWith('/move')) {
+      destinations.push(JSON.parse(String(options.body)))
+      moved.push(path)
+      if (path.includes('file-3')) throw new TypeError('connection lost')
+      if (path.includes('file-2') && !retry)
+        return Response.json({ error: 'name_conflict' }, { status: 409 })
+      return Response.json(path.includes('file-2') ? second : file)
+    }
+    return Response.json(
+      path.includes('folderId=') ? browse([], folder) : browse([folder, file, second, third]),
+    )
+  })
+  const { page } = await open()
+  for (const name of ['Lettre.txt', 'Journal.txt', 'Brouillon.txt'])
+    await page.get(`input[aria-label="Sélectionner ${name}"]`).setValue(true)
+  page
+    .findAll('button')
+    .find((element) => element.text() === 'Déplacer vers…')!
+    .element.click()
+  await flushPromises()
+  let dialog = document.querySelector('[role="dialog"]')!
+  button('Photos de famille', dialog).click()
+  await flushPromises()
+  dialog = document.querySelector('[role="dialog"]')!
+  button('Déplacer ici', dialog).click()
+  await flushPromises()
+  expect(dialog.textContent).toContain('1 déplacé')
+  expect(dialog.textContent).toContain('1 refusé')
+  expect(dialog.textContent).toContain('1 inconnu')
+  expect(dialog.textContent).toContain('existe déjà')
+  expect(dialog.textContent).toContain('Résultat inconnu')
+  retry = true
+  button('Réessayer les refus', dialog).click()
+  await flushPromises()
+  expect(dialog.textContent).toContain('2 déplacés')
+  expect(dialog.textContent).toContain('1 inconnu')
+  expect(moved).toEqual([
+    '/api/elements/file-1/move',
+    '/api/elements/file-2/move',
+    '/api/elements/file-3/move',
+    '/api/elements/file-2/move',
+  ])
+  expect(destinations).toEqual(
+    Array.from({ length: 4 }, () => ({ parentId: folder.id, space: 'personal' })),
+  )
+})
+
+it('accepts only an internal drag onto an allowed folder and asks for confirmation before writing', async () => {
+  const writes: string[] = []
+  vi.stubGlobal('fetch', async (path: string, options: RequestInit) => {
+    if (options.method === 'POST') {
+      writes.push(path)
+      return Response.json(file)
+    }
+    return Response.json(path.includes('folderId=') ? browse([], folder) : browse())
+  })
+  const { page } = await open()
+  const target = page.get(`a[href="/dossiers/${folder.id}"]`).element.closest('tr')!
+  const source = page.get('input[aria-label="Sélectionner Lettre.txt"]').element.closest('tr')!
+  const external = { types: ['Files'] }
+  target.dispatchEvent(new Event('drop', { bubbles: true }))
+  await flushPromises()
+  expect(document.querySelector('[role="dialog"]')).toBeNull()
+  const types: string[] = []
+  const transfer = { types, setData: (type: string) => types.push(type) }
+  source.dispatchEvent(
+    Object.assign(new Event('dragstart', { bubbles: true }), { dataTransfer: transfer }),
+  )
+  target.dispatchEvent(
+    Object.assign(new Event('drop', { bubbles: true }), { dataTransfer: external }),
+  )
+  await flushPromises()
+  expect(document.querySelector('[role="dialog"]')).toBeNull()
+  source.dispatchEvent(
+    Object.assign(new Event('dragstart', { bubbles: true }), { dataTransfer: transfer }),
+  )
+  source.dispatchEvent(
+    Object.assign(new Event('drop', { bubbles: true }), { dataTransfer: transfer }),
+  )
+  await flushPromises()
+  expect(document.querySelector('[role="dialog"]')).toBeNull()
+  source.dispatchEvent(
+    Object.assign(new Event('dragstart', { bubbles: true }), { dataTransfer: transfer }),
+  )
+  target.dispatchEvent(
+    Object.assign(new Event('drop', { bubbles: true }), { dataTransfer: transfer }),
+  )
+  await flushPromises()
+  const dialog = document.querySelector('[role="dialog"]')!
+  expect(dialog.textContent).toContain('Destination : Espace personnel / Photos de famille')
+  expect(writes).toEqual([])
+  button('Déplacer ici', dialog).click()
+  await flushPromises()
+  expect(dialog.textContent).toContain('1 déplacé')
+  expect(writes).toEqual(['/api/elements/file-1/move'])
+})

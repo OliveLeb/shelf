@@ -2,8 +2,8 @@
 
 Vue 3, Vue Router et Nuxt UI (plugin Vite, sans Nuxt), thème et composants
 partagés fournis par `@shelf/ui`. Connexion persistante, navigation dans
-l’espace personnel et téléchargement direct S3. L’envoi et les commandes
-d’organisation seront ajoutés séparément.
+l’espace personnel, création de dossiers, renommage, déplacement et
+téléchargement direct S3. L’envoi sera ajouté séparément.
 
 Les dossiers ont une URL `/dossiers/{id}`. Les paramètres `tri` (`name`,
 `addedAt`, `size`), `ordre` (`asc`, `desc`) et `filtre` sont restaurés au
@@ -22,6 +22,24 @@ avec le nom fourni par `Content-Disposition`, sans relais des octets par l’API
 Le stockage doit être joignable depuis le navigateur sur une origine dédiée
 (HTTPS en production). En local, utiliser par exemple `127.0.0.1:9000` pour
 MinIO et `localhost:3000` pour le web : les cookies ne sont pas isolés par port.
+
+Les commandes d’organisation utilisent les capacités serveur et les routes
+existantes de création, renommage et déplacement. Sélectionner un élément
+pour le renommer ; sélectionner un ou plusieurs éléments pour « Déplacer vers… ».
+Le sélecteur permet de parcourir les dossiers personnels, de remonter au parent
+ou à la racine, puis de confirmer la destination. Glisser une ligne ou une
+sélection sur un dossier de la liste ouvre le même dialogue prépositionné sur
+ce dossier. Les fichiers locaux ne sont pas interprétés comme des éléments
+internes ; ce geste ne réordonne jamais les lignes.
+
+Les listes source et destination sont relues après les écritures. Les noms
+invalides et les conflits restent visibles ; aucun déplacement ne remplace
+ni ne renomme automatiquement un élément. Le bilan conserve un résultat par
+élément et la relance explicite concerne uniquement les refus confirmés, jamais
+les réussites. Après une réponse perdue ou une erreur serveur au résultat incertain,
+l’interface signale « Résultat inconnu », sans offrir de rejeu : vérifier les deux
+emplacements avant toute nouvelle action. Fermer/recharger ne reprend aucun lot.
+Ces états restent locaux aux dialogues et disparaissent avec la session.
 
 Depuis la racine du dépôt :
 

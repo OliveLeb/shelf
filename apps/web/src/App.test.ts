@@ -28,7 +28,12 @@ const folder = {
 
 function browse(elements: (typeof folder)[] = []) {
   return Response.json({
-    context: { space: { kind: 'personal' }, element: null, ancestors: [] },
+    context: {
+      space: { kind: 'personal' },
+      element: null,
+      ancestors: [],
+      capabilities: { canAdd: true },
+    },
     entries: elements.map((element) => ({ element, capabilities: {} })),
   })
 }

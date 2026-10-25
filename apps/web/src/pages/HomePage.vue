@@ -3,8 +3,10 @@ import { computed, onUnmounted, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ApiError } from '../api'
 import ElementList from '../components/ElementList.vue'
+import ElementNameDialog from '../components/ElementNameDialog.vue'
 import FileDetails from '../components/FileDetails.vue'
-import type { FolderContent } from '../storage'
+import MoveElementsDialog from '../components/MoveElementsDialog.vue'
+import type { ElementEntry, FolderContent, StorageElement } from '../storage'
 import { useSession } from '../stores/session'
 
 const session = useSession()
@@ -13,6 +15,8 @@ const router = useRouter()
 const content = shallowRef<FolderContent | null>(null)
 const loading = shallowRef(true)
 const error = shallowRef('')
+const naming = shallowRef<{ element?: StorageElement } | null>(null)
+const moving = shallowRef<{ entries: ElementEntry[]; targetId: string | null } | null>(null)
 const folderId = computed(() =>
   typeof route.params.folderId === 'string' ? route.params.folderId : '',
 )
@@ -76,7 +80,14 @@ function closeDetails() {
 function changeSort(value: string) {
   void router.push({ query: { ...route.query, tri: value } })
 }
+function openMove(entries: ElementEntry[], targetId?: string) {
+  moving.value = { entries, targetId: targetId ?? (folderId.value || null) }
+}
 
+watch(folderId, () => {
+  naming.value = null
+  moving.value = null
+})
 watch(requestPath, load, { immediate: true, flush: 'sync' })
 onUnmounted(() => controller?.abort())
 </script>
@@ -132,6 +143,12 @@ onUnmounted(() => controller?.abort())
         >
       </div>
       <div class="mb-5 flex flex-wrap items-end gap-3">
+        <UButton
+          v-if="content?.context.capabilities.canAdd"
+          icon="i-lucide-folder-plus"
+          @click="naming = {}"
+          >Nouveau dossier</UButton
+        >
         <UFormField label="Filtrer ce dossier" class="min-w-0 flex-1 basis-64">
           <UInput
             id="folder-filter"
@@ -194,13 +211,34 @@ onUnmounted(() => controller?.abort())
           :filter="filter"
           :at-root="!folderId"
           @inspect="inspect"
+          @rename="naming = { element: $event.element }"
+          @move="openMove"
           @clear-filter="filter = ''"
         />
       </section>
       <p class="mt-5 text-xs leading-relaxed text-muted">
+        Déplacez une sélection avec « Déplacer vers… » ou glissez-la sur un dossier de la liste. Le
+        dépôt de fichiers locaux et le réordonnancement ne sont pas proposés ici.
+      </p>
+      <p class="mt-3 text-xs leading-relaxed text-muted">
         Cet espace vous appartient. Même les administrateurs n’ont pas accès à vos fichiers privés.
       </p>
     </main>
+    <ElementNameDialog
+      v-if="naming"
+      :parent-id="folderId || null"
+      :element="naming.element"
+      @close="naming = null"
+      @changed="load"
+    />
+    <MoveElementsDialog
+      v-if="moving"
+      :entries="moving.entries"
+      :source-id="folderId || null"
+      :target-id="moving.targetId"
+      @close="moving = null"
+      @changed="load"
+    />
     <FileDetails
       v-if="fileId && !error"
       :key="fileId"
