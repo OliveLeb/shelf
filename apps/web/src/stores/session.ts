@@ -14,12 +14,18 @@ export const useSession = defineStore('session', () => {
   const account = shallowRef<Account | null>(null)
   const status = shallowRef<'checking' | 'authenticated' | 'anonymous' | 'error'>('checking')
   const logoutFailed = shallowRef(false)
+  const privacyEpoch = shallowRef(0)
   let generation = 0
   let version: string | null = null
+  let verifiedAccountId: string | null = null
   let verification: Promise<void> | undefined
 
-  function clear(next: typeof status.value) {
+  function clear(next: typeof status.value, preserveWork = false) {
     generation++
+    if (!preserveWork) {
+      privacyEpoch.value++
+      verifiedAccountId = null
+    }
     account.value = null
     status.value = next
   }
@@ -28,23 +34,31 @@ export const useSession = defineStore('session', () => {
     // Explicitly retain only public account fields, never a session secret.
     const { id, username, email, isAdmin, isActive } = value
     account.value = { id, username, email, isAdmin, isActive }
+    verifiedAccountId = id
     status.value = 'authenticated'
   }
 
   function verify() {
     if (verification) return verification
-    clear('checking')
+    const previousId = verifiedAccountId
+    clear('checking', true)
     const current = generation
     verification = (async () => {
       try {
         const result = await api<Account>('/account')
         if (current === generation) {
+          // A focus check may unmount pages, but does not end same-session work.
+          if ((previousId && previousId !== result.value.id) || version !== result.version)
+            privacyEpoch.value++
           version = result.version
           accept(result.value)
         }
       } catch (error) {
         if (current === generation) {
-          clear(error instanceof ApiError && error.status === 401 ? 'anonymous' : 'error')
+          const rejected = error instanceof ApiError && error.status === 401
+          // A failed check proves neither revocation nor an account switch. Mask
+          // the UI, but retain work until identity can be checked conclusively.
+          clear(rejected ? 'anonymous' : 'error', !rejected)
         }
       } finally {
         verification = undefined
@@ -93,13 +107,13 @@ export const useSession = defineStore('session', () => {
   }
 
   async function request<T>(path: string, options?: RequestInit) {
-    const current = generation
+    const current = privacyEpoch.value
     try {
       const result = await api<T>(path, options, version)
-      if (current !== generation) throw new DOMException('Session changed', 'AbortError')
+      if (current !== privacyEpoch.value) throw new DOMException('Session changed', 'AbortError')
       return result.value
     } catch (error) {
-      if (current === generation) {
+      if (current === privacyEpoch.value) {
         if (error instanceof SessionChangedError) await invalidate()
         else if (error instanceof ApiError && error.status === 401) clear('anonymous')
       }
@@ -107,5 +121,5 @@ export const useSession = defineStore('session', () => {
     }
   }
 
-  return { account, status, logoutFailed, verify, invalidate, login, logout, request }
+  return { account, status, logoutFailed, privacyEpoch, verify, invalidate, login, logout, request }
 })

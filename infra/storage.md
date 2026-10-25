@@ -197,10 +197,11 @@ done
 ```
 
 MinIO n'implémente pas la configuration CORS par bucket (`NotImplemented`) : il
-applique une règle globale, qui autorise toutes les origines par défaut. Cela
-suffit en développement ; pour reproduire la restriction en local, démarrer
-MinIO avec `MINIO_API_CORS_ALLOW_ORIGIN=http://localhost:3000` (l'origine
-cliente locale).
+applique une règle globale. Le Compose local la restreint explicitement avec
+`MINIO_API_CORS_ALLOW_ORIGIN`, par défaut `https://localhost:3000`, sans joker.
+Pour une autre origine exacte du navigateur, modifier cette variable dans `.env`
+et recréer uniquement le service local, comme décrit dans
+[le guide MinIO](README.md#origine-du-navigateur-et-envois-directs).
 
 ## Copies côté serveur
 

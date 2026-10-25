@@ -92,6 +92,35 @@ L'API S3 écoute sur `127.0.0.1:9000` (`MINIO_PORT`) et la console web sur
 `.env`, ignoré par Git ; les valeurs de `.env.example` sont réservées au poste
 local. Les objets sont conservés dans le volume `minio_data`.
 
+### Origine du navigateur et envois directs
+
+Compose fixe explicitement le CORS global de MinIO avec
+`MINIO_API_CORS_ALLOW_ORIGIN`, lu depuis `.env`, par défaut
+`https://localhost:3000` comme le [serveur web local](../apps/web/README.md).
+Pas de joker `*` : utiliser l'origine exacte affichée dans le navigateur
+(schéma, hôte, port, sans chemin ni `/` final), identique à
+`Authentication__ClientOrigin` côté API. Pour un autre hôte, port ou portail,
+modifier cette valeur dans `.env`, puis recréer **uniquement le MinIO local**
+depuis la racine du dépôt :
+
+```sh
+docker compose up -d --no-deps --force-recreate minio
+```
+
+Un simple `docker compose restart minio` ne recharge pas les variables
+d'environnement. La recréation conserve le volume `minio_data` ; ne pas lancer
+cette commande sur un déploiement partagé.
+
+Les octets sont envoyés directement au S3 par URL signées, pas via `/api` :
+`Storage__S3__Endpoint` doit être joignable par l'API **et par le navigateur**.
+En production, utiliser un endpoint HTTPS avec un certificat approuvé, jamais
+une adresse interne Docker telle que `http://minio:9000`. Le HTTP sur la boucle
+locale (`http://localhost:9000` ou `http://127.0.0.1:9000`) est une exception
+réservée au développement local, reconnue par les navigateurs modernes ; elle
+ne vaut pas pour un hôte distant ou une adresse réseau. Depuis un navigateur
+distant, `localhost` désigne sa propre machine : prévoir un endpoint S3 HTTPS
+accessible depuis celui-ci, sans désactiver les protections du navigateur.
+
 MinIO n'est plus publié par son éditeur (dépôt archivé, images officielles
 retirées). Compose utilise `chainguard/minio`, reconstruit depuis les sources de
 MinIO. Ce service ne sert qu'au développement ; en production, utiliser un

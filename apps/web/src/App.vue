@@ -3,10 +3,14 @@ import { fr } from '@nuxt/ui/locale'
 import { onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { sessionVersionKey } from './api'
+import SessionHeader from './components/SessionHeader.vue'
+import TransferPanel from './components/TransferPanel.vue'
 import { sessionRedirect } from './router'
 import { useSession } from './stores/session'
+import { useTransfers } from './stores/transfers'
 
 const session = useSession()
+const transfers = useTransfers()
 const router = useRouter()
 const route = useRoute()
 
@@ -28,16 +32,22 @@ function sessionChanged(event: StorageEvent) {
     void session.invalidate()
 }
 
+function beforeUnload(event: BeforeUnloadEvent) {
+  if (transfers.active) event.preventDefault()
+}
+
 onMounted(() => {
   window.addEventListener('storage', sessionChanged)
   window.addEventListener('focus', refresh)
   window.addEventListener('pageshow', refresh)
+  window.addEventListener('beforeunload', beforeUnload)
   document.addEventListener('visibilitychange', refresh)
 })
 onUnmounted(() => {
   window.removeEventListener('storage', sessionChanged)
   window.removeEventListener('focus', refresh)
   window.removeEventListener('pageshow', refresh)
+  window.removeEventListener('beforeunload', beforeUnload)
   document.removeEventListener('visibilitychange', refresh)
 })
 </script>
@@ -65,9 +75,11 @@ onUnmounted(() => {
         >Réessayer</UButton
       >
     </main>
-    <RouterView
-      v-else-if="!route.meta.protected || session.status === 'authenticated'"
-      :key="session.account?.id"
-    />
+    <div v-else-if="session.status === 'authenticated'" class="flex min-h-dvh flex-col bg-muted/20">
+      <SessionHeader />
+      <RouterView :key="`${session.account?.id}:${route.path}`" class="flex-1" />
+      <TransferPanel />
+    </div>
+    <RouterView v-else-if="!route.meta.protected" />
   </UApp>
 </template>

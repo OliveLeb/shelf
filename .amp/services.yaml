@@ -6,5 +6,6 @@ services:
     port: 9000
     health: /minio/health/live
     env:
+      MINIO_API_CORS_ALLOW_ORIGIN: https://localhost:3000
       MINIO_ROOT_USER: shelf
       MINIO_ROOT_PASSWORD: change-me-local-only
