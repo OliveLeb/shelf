@@ -30,6 +30,77 @@ public sealed class WebSessionTests : TestInstance
     private static string Credential(HttpResponseMessage response) => $"{CookieName}={Cookie(response).Value}";
 
     [Fact]
+    public async Task Web_registration_returns_only_an_ordinary_account_then_requires_a_separate_cookie_login()
+    {
+        var invitation = await Invite("invited@example.test");
+        using var anonymous = Browser();
+        var response = await anonymous.PostAsJsonAsync("/auth/web/register", new
+        {
+            token = Token(invitation), username = "invited", password = Password,
+            email = "attacker@example.test", isAdmin = true, role = "administrator"
+        });
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.False(response.Headers.Contains("Set-Cookie"));
+        Assert.Equal("no-store", response.Headers.CacheControl!.ToString());
+        var account = await Json(response);
+        Assert.Equal(new[] { "email", "id", "isActive", "isAdmin", "username" }, account.EnumerateObject().Select(p => p.Name).Order().ToArray());
+        Assert.Equal("invited@example.test", account.GetProperty("email").GetString());
+        Assert.False(account.GetProperty("isAdmin").GetBoolean());
+        Assert.True(account.GetProperty("isActive").GetBoolean());
+        Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync("/account")).StatusCode);
+
+        // A failed second stage must not undo the account created by the first.
+        var failedLogin = await Login(anonymous, "invited", "incorrect-password");
+        Assert.Equal(HttpStatusCode.Unauthorized, failedLogin.StatusCode);
+        Assert.Equal("invalid_credentials", await Error(failedLogin));
+        var login = await Login(anonymous, "INVITED@EXAMPLE.TEST");
+        Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+        Assert.Equal(account.GetProperty("id").GetGuid(), (await Json(login)).GetProperty("id").GetGuid());
+        using var browser = Browser(Credential(login));
+        Assert.Equal(account.GetProperty("id").GetGuid(), (await Json(await browser.GetAsync("/account"))).GetProperty("id").GetGuid());
+        Assert.Single((await Json(await browser.GetAsync("/account/sessions"))).EnumerateArray());
+        foreach (var denied in new[]
+        {
+            await browser.GetAsync("/admin/accounts"),
+            await browser.GetAsync("/admin/invitations"),
+            await browser.PostAsJsonAsync("/admin/invitations", new { email = "forbidden@example.test" }),
+            await browser.DeleteAsync($"/admin/invitations/{invitation.GetProperty("id").GetGuid()}")
+        })
+            Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+    }
+
+    [Fact]
+    public async Task Cookie_administrator_can_create_list_and_revoke_invitations_without_recoverable_secrets_in_lists()
+    {
+        using var loginClient = Browser();
+        using var administrator = Browser(Credential(await Login(loginClient)));
+        var created = await administrator.PostAsJsonAsync("/admin/invitations", new { email = "invited@example.test" });
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var invitation = await Json(created);
+        Assert.StartsWith(Origin + "/accept-invitation#token=", invitation.GetProperty("link").GetString());
+        Assert.InRange(invitation.GetProperty("expiresAt").GetDateTimeOffset(), Clock.GetUtcNow().AddDays(7).AddSeconds(-1), Clock.GetUtcNow().AddDays(7));
+
+        foreach (var revoked in new[] { false, true })
+        {
+            if (revoked)
+                Assert.Equal(HttpStatusCode.NoContent, (await administrator.DeleteAsync($"/admin/invitations/{invitation.GetProperty("id").GetGuid()}")).StatusCode);
+            var response = await administrator.GetAsync("/admin/invitations");
+            Assert.Equal("no-store", response.Headers.CacheControl!.ToString());
+            var listed = Assert.Single((await Json(response)).EnumerateArray());
+            Assert.Equal(new[] { "consumed", "createdAt", "email", "expiresAt", "id", "revoked" }, listed.EnumerateObject().Select(p => p.Name).Order().ToArray());
+            Assert.Equal(invitation.GetProperty("id").GetGuid(), listed.GetProperty("id").GetGuid());
+            Assert.Equal("invited@example.test", listed.GetProperty("email").GetString());
+            Assert.Equal(revoked, listed.GetProperty("revoked").GetBoolean());
+            Assert.False(listed.GetProperty("consumed").GetBoolean());
+            Assert.DoesNotContain(Token(invitation), await response.Content.ReadAsStringAsync());
+        }
+        var rejected = await loginClient.PostAsJsonAsync("/auth/web/register", new { token = Token(invitation), username = "invited", password = Password });
+        Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+        Assert.Equal("invalid_token", await Error(rejected));
+        Assert.DoesNotContain(Token(invitation), string.Join('\n', Logs.Messages));
+    }
+
+    [Fact]
     public async Task Web_login_returns_only_account_and_a_persistent_host_cookie()
     {
         using var browser = Browser();
@@ -103,6 +174,7 @@ public sealed class WebSessionTests : TestInstance
     [InlineData(Origin, "1, 1")]
     public async Task Every_web_unsafe_operation_requires_exact_origin_and_csrf_header(string? origin, string? csrf)
     {
+        var invitation = await Invite("invited@example.test");
         using var loginClient = Browser();
         var login = await Login(loginClient);
         using var browser = Browser(Credential(login));
@@ -110,7 +182,7 @@ public sealed class WebSessionTests : TestInstance
         browser.DefaultRequestHeaders.Remove("X-Shelf-CSRF");
         if (origin is not null) browser.DefaultRequestHeaders.TryAddWithoutValidation("Origin", origin);
         if (csrf is not null) browser.DefaultRequestHeaders.TryAddWithoutValidation("X-Shelf-CSRF", csrf);
-        // Login must be protected even before the browser has a cookie.
+        // Web login and registration must be protected even before the browser has a cookie.
         using var anonymous = Browser();
         anonymous.DefaultRequestHeaders.Remove("Origin");
         anonymous.DefaultRequestHeaders.Remove("X-Shelf-CSRF");
@@ -120,6 +192,10 @@ public sealed class WebSessionTests : TestInstance
         {
             await Login(anonymous),
             await Login(browser),
+            await anonymous.PostAsJsonAsync("/auth/web/register", new { token = Token(invitation), username = "invited", password = Password }),
+            await browser.PostAsJsonAsync("/auth/web/register", new { token = Token(invitation), username = "invited", password = Password }),
+            await browser.PostAsJsonAsync("/admin/invitations", new { email = "forbidden@example.test" }),
+            await browser.DeleteAsync($"/admin/invitations/{invitation.GetProperty("id").GetGuid()}"),
             await browser.PostAsync("/auth/logout", null),
             await browser.PostAsJsonAsync("/folders", new { name = "forbidden" }),
             await browser.PatchAsJsonAsync("/account/username", new { username = "forbidden" })
@@ -127,17 +203,23 @@ public sealed class WebSessionTests : TestInstance
         foreach (var response in responses)
         {
             Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+            Assert.Equal("csrf_rejected", await Error(response));
             Assert.False(response.Headers.Contains("Set-Cookie"));
             Assert.False(response.Headers.Contains("Access-Control-Allow-Origin"));
         }
         Assert.Equal("owner", (await Json(await browser.GetAsync("/account"))).GetProperty("username").GetString());
         Assert.Empty(await Root(browser));
+        var pending = Assert.Single((await Json(await Admin.GetAsync("/admin/invitations"))).EnumerateArray());
+        Assert.False(pending.GetProperty("revoked").GetBoolean());
+        Assert.False(pending.GetProperty("consumed").GetBoolean());
     }
 
     [Theory]
     [InlineData("/auth/web/login/")]
     [InlineData("/AUTH/WEB/LOGIN")]
-    public async Task Login_route_aliases_cannot_bypass_csrf(string route)
+    [InlineData("/auth/web/register/")]
+    [InlineData("/AUTH/WEB/REGISTER")]
+    public async Task Web_auth_route_aliases_cannot_bypass_csrf(string route)
     {
         var response = await Client.PostAsJsonAsync(route, new { identifier = "owner", password = Password });
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
@@ -314,13 +396,15 @@ public sealed class WebSessionTests : TestInstance
         Assert.Equal(HttpStatusCode.OK, (await browser.GetAsync("/account")).StatusCode);
     }
 
-    [Fact]
-    public async Task Csrf_is_checked_before_json_binding_and_multiple_origin_values_are_rejected()
+    [Theory]
+    [InlineData("/auth/web/login")]
+    [InlineData("/auth/web/register")]
+    public async Task Csrf_is_checked_before_json_binding_and_multiple_origin_values_are_rejected(string route)
     {
         using var browser = Browser();
         browser.DefaultRequestHeaders.Remove("Origin");
         browser.DefaultRequestHeaders.TryAddWithoutValidation("Origin", new[] { Origin, "https://foreign.example.test" });
-        var response = await browser.PostAsync("/auth/web/login", new StringContent("not json", System.Text.Encoding.UTF8, "application/json"));
+        var response = await browser.PostAsync(route, new StringContent("not json", System.Text.Encoding.UTF8, "application/json"));
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         Assert.Equal("csrf_rejected", await Error(response));
         Assert.False(response.Headers.Contains("Set-Cookie"));

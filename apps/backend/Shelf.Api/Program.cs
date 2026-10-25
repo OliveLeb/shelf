@@ -54,25 +54,29 @@ builder.Services.AddOpenApi(options =>
         }
         if (policy is not null)
         {
+            var anonymousWeb = policy.WebLogin || policy.WebRegistration;
+            var webOperation = policy.WebRegistration ? "web registration" : "web login";
             operation.Description = (operation.Description is null ? "" : operation.Description + "\n\n") +
                 "Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity.";
             if (unsafeMethod)
             {
-                operation.Description += " Web requests (cookie present, and always web login) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.";
+                operation.Description += $" Web requests (cookie present, and always {webOperation}) require exact configured Origin and X-Shelf-CSRF: 1, otherwise 403. No permissive API CORS.";
                 operation.Parameters ??= [];
                 operation.Parameters.Add(new OpenApiParameter
                 {
-                    Name = "Origin", In = ParameterLocation.Header, Required = policy.WebLogin,
-                    Description = "Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.",
+                    Name = "Origin", In = ParameterLocation.Header, Required = anonymousWeb,
+                    Description = $"Exactly Authentication:ClientOrigin. Required with a web cookie and always for {webOperation}. Missing, null or foreign origins are rejected.",
                     Schema = new OpenApiSchema { Type = JsonSchemaType.String }
                 });
                 operation.Parameters.Add(new OpenApiParameter
                 {
-                    Name = "X-Shelf-CSRF", In = ParameterLocation.Header, Required = policy.WebLogin,
-                    Description = "Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.",
+                    Name = "X-Shelf-CSRF", In = ParameterLocation.Header, Required = anonymousWeb,
+                    Description = anonymousWeb
+                        ? $"Exactly 1. Always required for {webOperation}, even without a cookie or with Bearer credentials."
+                        : $"Exactly 1. Required with a web cookie and always for {webOperation}; not required for Bearer-only mobile requests.",
                     Schema = new OpenApiSchema { Type = JsonSchemaType.String, Pattern = "^1$" }
                 });
-                if (policy.WebLogin)
+                if (anonymousWeb)
                     (operation.Security ??= []).Add(new OpenApiSecurityRequirement { [new OpenApiSecuritySchemeReference("WebCsrf", context.Document)] = [] });
             }
             operation.Responses ??= new();

@@ -1,7 +1,7 @@
 info:
   name: Log in on the web
   type: http
-  seq: 3
+  seq: 4
   tags:
     - Authentication
 
@@ -14,7 +14,7 @@ http:
       description: Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.
     - name: X-Shelf-CSRF
       value: ""
-      description: Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.
+      description: Exactly 1. Always required for web login, even without a cookie or with Bearer credentials.
     - name: X-Shelf-CSRF
       value: "{{apiKey}}"
       description: Value must be exactly 1. Web unsafe requests also require Origin exactly equal to Authentication:ClientOrigin; no permissive CORS is provided.
@@ -51,7 +51,7 @@ examples:
           description: Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.
         - name: X-Shelf-CSRF
           value: ""
-          description: Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.
+          description: Exactly 1. Always required for web login, even without a cookie or with Bearer credentials.
         - name: X-Shelf-CSRF
           value: "{{apiKey}}"
           description: Value must be exactly 1. Web unsafe requests also require Origin exactly equal to Authentication:ClientOrigin; no permissive CORS is provided.
@@ -90,7 +90,7 @@ examples:
           description: Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.
         - name: X-Shelf-CSRF
           value: ""
-          description: Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.
+          description: Exactly 1. Always required for web login, even without a cookie or with Bearer credentials.
         - name: X-Shelf-CSRF
           value: "{{apiKey}}"
           description: Value must be exactly 1. Web unsafe requests also require Origin exactly equal to Authentication:ClientOrigin; no permissive CORS is provided.
@@ -119,7 +119,7 @@ examples:
           description: Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.
         - name: X-Shelf-CSRF
           value: ""
-          description: Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.
+          description: Exactly 1. Always required for web login, even without a cookie or with Bearer credentials.
         - name: X-Shelf-CSRF
           value: "{{apiKey}}"
           description: Value must be exactly 1. Web unsafe requests also require Origin exactly equal to Authentication:ClientOrigin; no permissive CORS is provided.
@@ -148,7 +148,7 @@ examples:
           description: Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.
         - name: X-Shelf-CSRF
           value: ""
-          description: Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.
+          description: Exactly 1. Always required for web login, even without a cookie or with Bearer credentials.
         - name: X-Shelf-CSRF
           value: "{{apiKey}}"
           description: Value must be exactly 1. Web unsafe requests also require Origin exactly equal to Authentication:ClientOrigin; no permissive CORS is provided.
@@ -177,7 +177,7 @@ examples:
           description: Exactly Authentication:ClientOrigin. Required with a web cookie and always for web login. Missing, null or foreign origins are rejected.
         - name: X-Shelf-CSRF
           value: ""
-          description: Exactly 1. Required with a web cookie and always for web login; not required for Bearer-only mobile requests.
+          description: Exactly 1. Always required for web login, even without a cookie or with Bearer credentials.
         - name: X-Shelf-CSRF
           value: "{{apiKey}}"
           description: Value must be exactly 1. Web unsafe requests also require Origin exactly equal to Authentication:ClientOrigin; no permissive CORS is provided.

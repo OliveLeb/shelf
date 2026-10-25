@@ -1,9 +1,9 @@
 # Application web
 
 Vue 3, Vue Router et Nuxt UI (plugin Vite, sans Nuxt), thème et composants
-partagés fournis par `@shelf/ui`. Connexion persistante et liste de la racine
-de l’espace personnel ; la navigation dans les dossiers et les transferts
-seront ajoutés séparément.
+partagés fournis par `@shelf/ui`. Connexion persistante, invitations et liste
+de la racine de l’espace personnel ; la navigation dans les dossiers et les
+transferts seront ajoutés séparément.
 
 Depuis la racine du dépôt :
 
@@ -43,11 +43,37 @@ des réponses API, et configurer `Authentication__ClientOrigin` avec cette
 origine exacte. `pnpm preview` n’est pas un serveur de production API.
 Voir [le transport des sessions](../../docs/authentication.md#transport-des-sessions-web-et-mobile).
 
-Pinia ne conserve que le compte courant et l’état de session. Les listes sont
-locales à la page et effacées quand la session est vérifiée, refusée ou quittée.
+Pinia ne conserve que le compte courant et l’état de session. La liste personnelle
+reste locale à la page et est rechargée quand la session est vérifiée.
 Le cookie HttpOnly reste entièrement sous le contrôle du navigateur ; aucun
 secret n’est écrit dans les stockages JavaScript. La session est revérifiée
 au démarrage, au retour sur l’onglet et à l’actualisation de l’espace.
+
+Les administrateurs accèdent à `/administration/invitations` depuis une navigation
+distincte de l’espace personnel. Création, liste et révocation utilisent la même
+session et les contrôles serveur existants. Le lien secret est affiché seulement
+à la création, avec copie et sélection manuelle en secours ; quitter ou recharger
+la page le perd. Une nouvelle invitation révoque les anciennes pour cet email.
+Aucun email n’est envoyé automatiquement.
+
+Pendant une revérification de la même session, la page Administration est masquée
+mais conserve son formulaire et son éventuel lien en mémoire, y compris après
+une erreur réseau. Ils sont détruits à la déconnexion, au rejet de session ou
+au changement de compte ; le retour d’une vérification ne rejoue aucune écriture.
+
+La page `/accept-invitation` lit `#token=…`, retire immédiatement le fragment de
+l’historique et garde le secret uniquement en mémoire locale à la page. Après un
+rechargement, rouvrir le lien original. Aucun email n’est demandé ou déduit du
+token : le serveur impose celui de l’invitation. La création du compte par
+`/auth/web/register` précède la connexion par `/auth/web/login`. Si seule la
+connexion échoue, la page confirme le compte créé et propose la connexion,
+sans nouveau formulaire d’inscription. Une réponse perdue pendant la création
+reste une issue incertaine, jamais un succès supposé ; aucune écriture n’est
+réessayée automatiquement. Les formulaires ne quittent pas la mémoire de leur page.
+La navigation interne est bloquée pendant l’inscription et sa connexion pour
+éviter qu’elles ne continuent après un départ volontaire. Un changement de session
+dans un autre onglet empêche également la connexion automatique tardive.
+
 Sur les navigateurs modernes disposant de Web Locks (contexte HTTPS), les
 connexions/déconnexions attendent les requêtes API des autres onglets pour qu’une
 ancienne réponse ne remplace pas le nouveau cookie. Un marqueur aléatoire dans
