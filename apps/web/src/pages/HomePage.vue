@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, shallowRef } from 'vue'
 import { useSession } from '../stores/session'
+import AppHeader from '../components/AppHeader.vue'
 
 interface Element {
   id: string
@@ -48,21 +49,7 @@ onUnmounted(() => controller?.abort())
 
 <template>
   <div class="min-h-dvh bg-muted/20">
-    <header class="border-b border-default bg-default">
-      <div
-        class="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-4 px-5 py-5 sm:px-8"
-      >
-        <span class="text-2xl font-semibold tracking-tight text-primary">Shelf</span>
-        <div class="flex min-w-0 items-center gap-3 sm:gap-6">
-          <span class="max-w-32 truncate text-sm text-muted sm:max-w-64">{{
-            session.account?.username
-          }}</span>
-          <UButton color="neutral" variant="outline" size="sm" @click="session.logout"
-            >Se déconnecter</UButton
-          >
-        </div>
-      </div>
-    </header>
+    <AppHeader />
     <main class="mx-auto max-w-5xl px-5 py-10 sm:px-8 sm:py-14">
       <div class="mb-8 flex items-start justify-between gap-4">
         <div>

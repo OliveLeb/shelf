@@ -18,9 +18,9 @@ export const useSession = defineStore('session', () => {
   let version: string | null = null
   let verification: Promise<void> | undefined
 
-  function clear(next: typeof status.value) {
+  function clear(next: typeof status.value, keepAccount = false) {
     generation++
-    account.value = null
+    if (!keepAccount) account.value = null
     status.value = next
   }
 
@@ -33,7 +33,7 @@ export const useSession = defineStore('session', () => {
 
   function verify() {
     if (verification) return verification
-    clear('checking')
+    clear('checking', true)
     const current = generation
     verification = (async () => {
       try {
@@ -44,7 +44,8 @@ export const useSession = defineStore('session', () => {
         }
       } catch (error) {
         if (current === generation) {
-          clear(error instanceof ApiError && error.status === 401 ? 'anonymous' : 'error')
+          const rejected = error instanceof ApiError && error.status === 401
+          clear(rejected ? 'anonymous' : 'error', !rejected)
         }
       } finally {
         verification = undefined
@@ -60,13 +61,18 @@ export const useSession = defineStore('session', () => {
     await verify()
   }
 
-  async function login(identifier: string, password: string) {
-    const result = await api<Account>('/auth/web/login', {
-      method: 'POST',
-      body: JSON.stringify({ identifier, password, deviceName: 'Navigateur web' }),
-    })
+  async function login(identifier: string, password: string, expectedVersion?: string | null) {
+    // A failed account switch must not redirect the login page to the old account.
     clear('anonymous')
     logoutFailed.value = false
+    const result = await api<Account>(
+      '/auth/web/login',
+      {
+        method: 'POST',
+        body: JSON.stringify({ identifier, password, deviceName: 'Navigateur web' }),
+      },
+      expectedVersion,
+    )
     version = result.version
     accept(result.value)
   }
@@ -94,9 +100,12 @@ export const useSession = defineStore('session', () => {
 
   async function request<T>(path: string, options?: RequestInit) {
     const current = generation
+    const identity = account.value?.id
     try {
       const result = await api<T>(path, options, version)
-      if (current !== generation) throw new DOMException('Session changed', 'AbortError')
+      // A same-session check hides the form but must not discard a committed write's response.
+      if (current !== generation && (identity !== account.value?.id || version !== result.version))
+        throw new DOMException('Session changed', 'AbortError')
       return result.value
     } catch (error) {
       if (current === generation) {

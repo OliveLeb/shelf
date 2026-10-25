@@ -3,14 +3,14 @@ namespace Shelf.Api.Authentication;
 public static class SessionTransport
 {
     public const string CookieName = "__Host-shelf-session";
-    public sealed record Policy(bool WebLogin = false, bool MobileLogin = false, bool Logout = false);
+    public sealed record Policy(bool WebLogin = false, bool MobileLogin = false, bool Logout = false, bool WebRegistration = false);
 
     public static void Validate(HttpContext http, string clientOrigin)
     {
         _ = Authorization(http);
         var policy = http.GetEndpoint()?.Metadata.GetMetadata<Policy>();
         var unsafeMethod = !HttpMethods.IsGet(http.Request.Method) && !HttpMethods.IsHead(http.Request.Method) && !HttpMethods.IsOptions(http.Request.Method);
-        if (policy?.WebLogin == true || (HasCookie(http) && unsafeMethod))
+        if (policy?.WebLogin == true || policy?.WebRegistration == true || (HasCookie(http) && unsafeMethod))
         {
             var origin = http.Request.Headers.Origin;
             var csrf = http.Request.Headers["X-Shelf-CSRF"];

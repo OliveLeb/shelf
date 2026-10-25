@@ -13,7 +13,7 @@ const route = useRoute()
 watch(
   () => session.status,
   (status) => {
-    const redirect = sessionRedirect(router, route, status)
+    const redirect = sessionRedirect(router, route, status, session.account?.isAdmin)
     if (redirect) void router.replace(redirect)
   },
 )
@@ -45,13 +45,13 @@ onUnmounted(() => {
 <template>
   <UApp :locale="fr">
     <main
-      v-if="session.status === 'checking'"
+      v-if="session.status === 'checking' && route.name !== 'accept-invitation'"
       class="flex min-h-dvh items-center justify-center p-6"
     >
       <p role="status" class="text-sm text-muted">Vérification de votre session…</p>
     </main>
     <main
-      v-else-if="session.status === 'error'"
+      v-else-if="session.status === 'error' && route.name !== 'accept-invitation'"
       class="flex min-h-dvh flex-col items-center justify-center gap-5 p-6 text-center"
     >
       <p role="alert">
@@ -65,9 +65,17 @@ onUnmounted(() => {
         >Réessayer</UButton
       >
     </main>
-    <RouterView
-      v-else-if="!route.meta.protected || session.status === 'authenticated'"
-      :key="session.account?.id"
-    />
+    <div v-show="!route.meta.admin || session.status === 'authenticated'">
+      <RouterView
+        v-if="
+          route.meta.admin
+            ? session.account?.isAdmin
+            : (route.name === 'accept-invitation' ||
+                !['checking', 'error'].includes(session.status)) &&
+              (!route.meta.protected || session.status === 'authenticated')
+        "
+        :key="route.meta.protected ? session.account?.id : undefined"
+      />
+    </div>
   </UApp>
 </template>

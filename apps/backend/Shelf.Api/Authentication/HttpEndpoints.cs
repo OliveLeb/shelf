@@ -80,6 +80,10 @@ public static class HttpEndpoints
         });
 
         api.MapPost("/auth/register", async (Registration input, HttpContext h) => Results.Json(await Db(h).Register(input), statusCode: 201)).Produces<Account>(201).WithTags("Authentication").AllowAnonymous().RequireRateLimiting("public-auth").WithSummary("Register with an invitation");
+        api.MapPost("/auth/web/register", async (Registration input, HttpContext h) => Results.Json(await Db(h).Register(input), statusCode: 201)).Produces<Account>(201).WithTags("Authentication").AllowAnonymous().RequireRateLimiting("public-auth").WithSummary("Register on the web with an invitation")
+            .WithMetadata(new SessionTransport.Policy(WebRegistration: true))
+            .WithDescription("Returns Account only, with the invitation email and ordinary privileges. Does not create a session or set a cookie. After 201, call /auth/web/login separately; a login failure does not undo registration.")
+            .Produces(400).Produces(409).Produces(429);
         api.MapPost("/auth/login", async (Login input, HttpContext h) => Results.Ok(await Db(h).Login(input))).Produces<LoginResult>().WithTags("Authentication").AllowAnonymous().RequireRateLimiting("public-auth").WithSummary("Log in")
             .WithMetadata(new SessionTransport.Policy(MobileLogin: true))
             .WithDescription("Mobile Bearer login. Returns the opaque token. With a web session cookie, rejects with 400 web_login_required after CSRF validation; use /auth/web/login instead.")

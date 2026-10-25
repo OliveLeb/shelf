@@ -2,6 +2,7 @@
 
 Implémente [l’issue #1](https://github.com/OliveLeb/shelf/issues/1) et le transport
 web persistant de [l’issue #44](https://github.com/OliveLeb/shelf/issues/44).
+Le parcours d’invitation web est décrit par [l’issue #45](https://github.com/OliveLeb/shelf/issues/45).
 Aucun email n’est envoyé.
 
 ## Configuration et migrations
@@ -83,6 +84,10 @@ Si un cookie web accompagne `/auth/login`, le serveur exige d’abord les en-tê
 web ci-dessous, puis refuse avec `400 web_login_required` : cette route ne doit
 pas permettre au navigateur de récupérer le secret dans du JSON.
 
+`POST /auth/register` conserve son comportement : inscription sur invitation,
+`201` avec le compte seul, sans connexion automatique. Sans cookie web, aucun
+en-tête CSRF n’est demandé sur cette route historique.
+
 ### Web : cookie persistant
 
 `POST /auth/web/login` reçoit le même JSON `Login`, mais ne retourne que le compte
@@ -108,6 +113,35 @@ invalide donne `401 authentication_required`. Les `401` avec cookie le supprimen
 avec les mêmes attributs de sécurité et une expiration passée. Un logout web
 réussi révoque uniquement sa session et supprime également le cookie.
 
+### Invitations web : inscription puis connexion
+
+Le navigateur accepte une invitation en **deux requêtes distinctes** :
+
+1. `POST /auth/web/register` reçoit `{token, username, password}` avec les en-têtes
+   web ci-dessous, même sans session. Il réutilise la transaction d’inscription
+   existante : compte et consommation unique de l’invitation sont atomiques.
+   La réponse `201` contient **uniquement le compte**, avec l’email de l’invitation,
+   `isAdmin: false` et `isActive: true`. Tout email ou rôle fourni dans le JSON
+   est ignoré. Aucun jeton de session, aucune enveloppe de connexion et aucun
+   `Set-Cookie` ne sont émis ; une session web déjà présente reste inchangée.
+2. Après ce `201`, `POST /auth/web/login` reçoit `{identifier, password, deviceName}`
+   pour établir le cookie persistant. L’identifiant peut être le username choisi
+   ou l’email imposé par l’invitation. Le client distingue impérativement le succès
+   de l’inscription du résultat de cette connexion.
+
+Une inscription refusée (`400` validation ou `invalid_token`, `409` conflit
+d’identifiant, `403 csrf_rejected`, `429` limitation) ne crée pas de compte et ne
+consomme pas l’invitation. Un jeton absent, forgé, expiré, révoqué, remplacé ou déjà
+consommé donne `400 invalid_token`. Un conflit de username ou une validation
+rejetée permet donc de corriger les champs puis de réessayer avec le même jeton.
+
+En revanche, **après le `201`, le compte existe et l’invitation est consommée**.
+Un échec ultérieur de connexion (`401 invalid_credentials`, `429`, panne réseau
+ou serveur) n’annule pas l’inscription. Afficher « compte créé, connexion échouée »
+et proposer de se connecter, sans renvoyer l’inscription ni réutiliser le lien.
+Si la réponse d’inscription est perdue, ne pas déduire que rien n’a été créé :
+proposer aussi la connexion avec les identifiants choisis.
+
 ### CSRF et déploiement HTTPS
 
 Toute requête web non sûre (`POST`, `PUT`, `PATCH`, `DELETE`), sur les opérations
@@ -122,8 +156,9 @@ L’origine doit être **exactement** l’origine normalisée depuis
 `Authentication__ClientOrigin` (schéma, hôte et port, sans slash final) ; une origine absente, `null`, étrangère, avec
 slash final ou plusieurs valeurs est refusée. L’en-tête CSRF doit être unique et
 valoir exactement `1`. Sinon : `403 csrf_rejected`, avant le traitement du JSON
-et toute mutation. Cette règle s’applique **toujours à `/auth/web/login`**, même
-sans cookie, et aux autres opérations non sûres dès qu’un cookie web est présent.
+et toute mutation. Cette règle s’applique **toujours à `/auth/web/login` et
+`/auth/web/register`**, même sans cookie, et aux autres opérations non sûres dès
+qu’un cookie web est présent, notamment la création et la révocation d’invitations.
 Les lectures `GET` ne demandent pas ces en-têtes.
 
 L’en-tête personnalisé + l’origine exacte, avec **aucun CORS permissif sur l’API**,
@@ -176,6 +211,7 @@ compte entre 12 et 1024 caractères. L’ID du compte ne change jamais.
 | --- | --- | --- | --- |
 | `GET /health` | Public | — | 200, santé du processus |
 | `POST /auth/register` | Public limité | `token`, `username`, `password` | 201, compte ordinaire ; email imposé par invitation |
+| `POST /auth/web/register` | Public limité + en-têtes web même anonyme | `token`, `username`, `password` | 201, compte seul ; aucune session ni cookie ; connexion web séparée |
 | `POST /auth/login` | Public limité | `identifier` (username ou email), `password`, `deviceName` facultatif (200 caractères max) | 200, `{account, sessionId, token, expiresAt}` |
 | `POST /auth/web/login` | Public limité + en-têtes web | même `Login` | 200, compte seulement + cookie persistant |
 | `POST /auth/reset-password` | Public limité | `token`, `password` | 204 ; toutes les sessions révoquées |
@@ -215,9 +251,10 @@ base indisponible. ASP.NET Core renvoie également `400` sur un JSON invalide et
 Une invitation expire après sept jours ; une récupération après une heure,
 borne exclue. Les liens sont rendus uniquement lors de leur création :
 `<origine>/accept-invitation#token=<secret>` et
-`<origine>/reset-password#token=<secret>`. Le futur client lit le fragment et
+`<origine>/reset-password#token=<secret>`. Le client lit le fragment et
 transmet le secret dans le corps POST ; le fragment n’est pas envoyé au serveur
-par le navigateur. Ces pages clientes restent à construire.
+par le navigateur. Le client ne doit pas le journaliser ni le conserver dans
+localStorage/sessionStorage ; retirer le fragment de l’URL après lecture.
 
 Une nouvelle invitation révoque les précédentes pour le même email. Une nouvelle
 récupération remplace la précédente pour ce compte. Une validation rejetée ou un
