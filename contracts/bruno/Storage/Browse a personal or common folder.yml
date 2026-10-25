@@ -1,0 +1,228 @@
+info:
+  name: Browse a personal or common folder
+  type: http
+  seq: 26
+  tags:
+    - Storage
+
+http:
+  method: GET
+  url: "{{baseUrl}}/spaces/:space/browse"
+  params:
+    - name: space
+      value: ""
+      type: path
+    - name: folderId
+      value: ""
+      type: query
+      disabled: true
+    - name: sort
+      value: ""
+      type: query
+      disabled: true
+    - name: order
+      value: ""
+      type: query
+      disabled: true
+  auth:
+    type: bearer
+    token: "{{token}}"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+examples:
+  - name: 200 Response
+    description: OK
+    request:
+      url: "{{baseUrl}}/spaces/:space/browse"
+      method: GET
+      params:
+        - name: space
+          value: ""
+          type: path
+        - name: folderId
+          value: ""
+          type: query
+          disabled: true
+        - name: sort
+          value: ""
+          type: query
+          disabled: true
+        - name: order
+          value: ""
+          type: query
+          disabled: true
+    response:
+      status: 200
+      statusText: OK
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "context": {
+              "space": {
+                "kind": ""
+              },
+              "element": "",
+              "ancestors": [
+                {
+                  "id": "",
+                  "name": ""
+                }
+              ],
+              "capabilities": {
+                "canDownload": false,
+                "canAdd": false,
+                "canRename": false,
+                "canMove": false,
+                "canTrash": false,
+                "canShare": false,
+                "canCopy": false
+              }
+            },
+            "entries": [
+              {
+                "element": {
+                  "id": "",
+                  "kind": "",
+                  "name": "",
+                  "parentId": "",
+                  "size": "",
+                  "contentType": "",
+                  "addedAt": "",
+                  "addedBy": "",
+                  "thumbnailState": ""
+                },
+                "capabilities": {
+                  "canDownload": false,
+                  "canAdd": false,
+                  "canRename": false,
+                  "canMove": false,
+                  "canTrash": false,
+                  "canShare": false,
+                  "canCopy": false
+                }
+              }
+            ]
+          }
+  - name: 400 Response
+    description: Bad Request
+    request:
+      url: "{{baseUrl}}/spaces/:space/browse"
+      method: GET
+      params:
+        - name: space
+          value: ""
+          type: path
+        - name: folderId
+          value: ""
+          type: query
+          disabled: true
+        - name: sort
+          value: ""
+          type: query
+          disabled: true
+        - name: order
+          value: ""
+          type: query
+          disabled: true
+    response:
+      status: 400
+      statusText: Bad Request
+      body:
+        type: text
+        data: ""
+  - name: 401 Response
+    description: Unauthorized
+    request:
+      url: "{{baseUrl}}/spaces/:space/browse"
+      method: GET
+      params:
+        - name: space
+          value: ""
+          type: path
+        - name: folderId
+          value: ""
+          type: query
+          disabled: true
+        - name: sort
+          value: ""
+          type: query
+          disabled: true
+        - name: order
+          value: ""
+          type: query
+          disabled: true
+    response:
+      status: 401
+      statusText: Unauthorized
+      body:
+        type: text
+        data: ""
+  - name: 403 Response
+    description: Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request.
+    request:
+      url: "{{baseUrl}}/spaces/:space/browse"
+      method: GET
+      params:
+        - name: space
+          value: ""
+          type: path
+        - name: folderId
+          value: ""
+          type: query
+          disabled: true
+        - name: sort
+          value: ""
+          type: query
+          disabled: true
+        - name: order
+          value: ""
+          type: query
+          disabled: true
+    response:
+      status: 403
+      statusText: Forbidden
+      body:
+        type: text
+        data: ""
+  - name: 404 Response
+    description: Not Found
+    request:
+      url: "{{baseUrl}}/spaces/:space/browse"
+      method: GET
+      params:
+        - name: space
+          value: ""
+          type: path
+        - name: folderId
+          value: ""
+          type: query
+          disabled: true
+        - name: sort
+          value: ""
+          type: query
+          disabled: true
+        - name: order
+          value: ""
+          type: query
+          disabled: true
+    response:
+      status: 404
+      statusText: Not Found
+      body:
+        type: text
+        data: ""
+
+docs: |-
+  Returns the folder context and children with capabilities, folders first. Space is personal (owned by the account) or common. Omit folderId for the root. Sort is name (default), addedAt or size; order is asc (default) or desc. No server-side filtering.
+
+  Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity.

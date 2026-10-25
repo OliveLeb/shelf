@@ -15,6 +15,19 @@ public sealed record AccountSummary(Guid Id, string Username);
 /// <summary>A file or a folder; Size, ContentType and ThumbnailState are null for folders. ThumbnailState is pending, available or unavailable.</summary>
 public sealed record Element(Guid Id, string Kind, string Name, Guid? ParentId, long? Size, string? ContentType, DateTimeOffset AddedAt, AccountSummary? AddedBy, string? ThumbnailState);
 
+/// <summary>Available operations under the same policy used by storage mutations. Space roots only allow adding content.</summary>
+public sealed record ElementCapabilities(bool CanDownload, bool CanAdd, bool CanRename, bool CanMove, bool CanTrash, bool CanShare, bool CanCopy);
+/// <summary>A readable element with its available operations.</summary>
+public sealed record ElementEntry(Element Element, ElementCapabilities Capabilities);
+/// <summary>The element's space relative to the current account: personal, common or shared.</summary>
+public sealed record ElementSpace(string Kind);
+/// <summary>An authorized ancestor, without metadata about inaccessible parents.</summary>
+public sealed record ElementAncestor(Guid Id, string Name);
+/// <summary>A visible element (null at a space root), its authorized ancestors root-first excluding itself, and available operations. ParentId is null when its parent is inaccessible.</summary>
+public sealed record ElementContext(ElementSpace Space, Element? Element, IReadOnlyList<ElementAncestor> Ancestors, ElementCapabilities Capabilities);
+/// <summary>The current personal or common folder context and its children, with folders first.</summary>
+public sealed record BrowseResult(ElementContext Context, IReadOnlyList<ElementEntry> Entries);
+
 /// <summary>Miniature generation state (pending, available, unavailable); Link is present only when available.</summary>
 public sealed record ThumbnailResult(string State, SignedUrl? Link);
 

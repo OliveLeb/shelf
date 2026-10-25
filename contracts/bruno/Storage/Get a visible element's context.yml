@@ -1,0 +1,115 @@
+info:
+  name: Get a visible element's context
+  type: http
+  seq: 27
+  tags:
+    - Storage
+
+http:
+  method: GET
+  url: "{{baseUrl}}/elements/:id/context"
+  params:
+    - name: id
+      value: ""
+      type: path
+  auth:
+    type: bearer
+    token: "{{token}}"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+  forwardAuthorizationHeader: true
+
+examples:
+  - name: 200 Response
+    description: OK
+    request:
+      url: "{{baseUrl}}/elements/:id/context"
+      method: GET
+      params:
+        - name: id
+          value: ""
+          type: path
+    response:
+      status: 200
+      statusText: OK
+      headers:
+        - name: Content-Type
+          value: application/json
+      body:
+        type: json
+        data: |-
+          {
+            "space": {
+              "kind": ""
+            },
+            "element": "",
+            "ancestors": [
+              {
+                "id": "",
+                "name": ""
+              }
+            ],
+            "capabilities": {
+              "canDownload": false,
+              "canAdd": false,
+              "canRename": false,
+              "canMove": false,
+              "canTrash": false,
+              "canShare": false,
+              "canCopy": false
+            }
+          }
+  - name: 401 Response
+    description: Unauthorized
+    request:
+      url: "{{baseUrl}}/elements/:id/context"
+      method: GET
+      params:
+        - name: id
+          value: ""
+          type: path
+    response:
+      status: 401
+      statusText: Unauthorized
+      body:
+        type: text
+        data: ""
+  - name: 403 Response
+    description: Insufficient access, or missing/invalid Origin or X-Shelf-CSRF on a web unsafe request.
+    request:
+      url: "{{baseUrl}}/elements/:id/context"
+      method: GET
+      params:
+        - name: id
+          value: ""
+          type: path
+    response:
+      status: 403
+      statusText: Forbidden
+      body:
+        type: text
+        data: ""
+  - name: 404 Response
+    description: Not Found
+    request:
+      url: "{{baseUrl}}/elements/:id/context"
+      method: GET
+      params:
+        - name: id
+          value: ""
+          type: path
+    response:
+      status: 404
+      statusText: Not Found
+      body:
+        type: text
+        data: ""
+
+docs: |-
+  Returns a file or folder, authorized ancestors root-first excluding itself, its personal/common/shared space and capabilities. Inaccessible parents are omitted, including parentId. Missing, trashed and unauthorized elements return 404.
+
+  Cookie and Authorization together are rejected (401); no credential fallback. Rejected cookies are cleared on 401. Cookies renew only after successful authenticated activity.
