@@ -285,10 +285,11 @@ class S3Request extends EventTarget {
   }
 }
 
-async function chooseFile(page: Awaited<ReturnType<typeof open>>['page']) {
+async function chooseFile(page: Awaited<ReturnType<typeof open>>['page'], name = 'preuve.txt') {
   const input = page.get('input[type="file"]')
   Object.defineProperty(input.element, 'files', {
-    value: [new File(['bonjour'], 'preuve.txt', { type: 'text/plain' })],
+    configurable: true,
+    value: [new File(['bonjour'], name, { type: 'text/plain' })],
   })
   await input.trigger('change')
   await flushPromises()
@@ -447,4 +448,264 @@ it('interrupts revoked-session uploads and never carries them into the next acco
   expect(page.text()).not.toContain('Dossier privé Alice')
   expect(router.currentRoute.value.path).toBe('/')
   expect(page.find('aside').exists()).toBe(false)
+})
+
+it('retries only missing multipart bytes and waits for publication before reporting completion', async () => {
+  const received: string[] = []
+  let fail = true
+  let confirm: ((response: Response) => void) | undefined
+  const ticket = (numbers: number[]) => ({
+    id: 'multipart',
+    method: 'PUT',
+    headers: { 'X-Part-Header': 'prescribed' },
+    partSize: 3,
+    expiresAt: '2099-01-01T00:00:00Z',
+    parts: numbers.map((number) => ({ number, url: `https://s3.example.test/${number}` })),
+  })
+  class MultipartS3 extends S3Request {
+    number = ''
+    override open = vi.fn<(method: string, url: string) => void>((_method, url) => {
+      this.number = url.split('/').at(-1)!
+    })
+    override async send(body: Blob) {
+      expect(this.withCredentials).toBe(false)
+      expect(this.setRequestHeader).toHaveBeenCalledWith('X-Part-Header', 'prescribed')
+      received.push(`${this.number}:${await body.text()}`)
+      if (this.number === '2' && fail) this.dispatchEvent(new Event('error'))
+      else this.dispatchEvent(new Event('load'))
+    }
+  }
+  vi.stubGlobal('XMLHttpRequest', MultipartS3)
+  let resumed = false
+  vi.stubGlobal('fetch', async (path: string) => {
+    if (path === '/api/account') return Response.json(alice)
+    if (path === '/api/spaces/personal/elements') return Response.json([])
+    if (path === '/api/uploads') return Response.json(ticket([1, 2, 3]))
+    if (path === '/api/uploads/multipart') {
+      const numbers = resumed ? [] : [2, 3]
+      resumed = true
+      return Response.json(ticket(numbers))
+    }
+    if (path === '/api/uploads/multipart/complete')
+      return new Promise<Response>((resolve) => {
+        confirm = resolve
+      })
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  const { page } = await open()
+  await chooseFile(page)
+  expect(page.get('aside').text()).toContain('Erreur')
+  expect(received).toEqual(['1:bon', '2:jou'])
+  fail = false
+  await page
+    .get('aside')
+    .findAll('button')
+    .find((button) => button.text() === 'Réessayer')!
+    .trigger('click')
+  await flushPromises()
+  expect(received).toEqual(['1:bon', '2:jou', '2:jou', '3:r'])
+  expect(page.get('aside').text()).toContain('Finalisation')
+  expect(page.get('aside').text()).not.toContain('Terminé')
+  confirm!(Response.json({ id: 'published' }, { status: 201 }))
+  await flushPromises()
+  expect(page.get('aside').text()).toContain('Terminé')
+})
+
+it.each([
+  {
+    scenario: 'batches',
+    expected: ['1:bon', '2:jou', '3:r'],
+    status: 'Terminé',
+    reads: 2,
+    confirmed: true,
+  },
+  {
+    scenario: 'expired',
+    expected: ['1:bon', '2:jou', '3:r'],
+    status: 'Terminé',
+    reads: 1,
+    confirmed: true,
+  },
+  {
+    scenario: 'renewed',
+    expected: ['1:bon', '1:bon', '2:jou', '3:r'],
+    status: 'Terminé',
+    reads: 1,
+    confirmed: true,
+  },
+  {
+    scenario: 'denied',
+    expected: ['1:bon', '1:bon'],
+    status: 'Erreur',
+    reads: 1,
+    confirmed: false,
+  },
+  { scenario: 'no-progress', expected: ['1:bon'], status: 'Erreur', reads: 1, confirmed: false },
+])(
+  'handles multipart $scenario without unbounded writes',
+  async ({ scenario, expected, status, reads: expectedReads, confirmed: expectedConfirmation }) => {
+    const received: string[] = []
+    let reads = 0
+    let confirmed = false
+    const ticket = (numbers: number[], expired = false) => ({
+      id: 'paged',
+      method: 'PUT',
+      headers: {},
+      partSize: 3,
+      expiresAt: expired ? '2000-01-01T00:00:00Z' : '2099-01-01T00:00:00Z',
+      parts: numbers.map((number) => ({
+        number,
+        url: `https://s3.example.test/${reads ? 'renewed' : 'initial'}/${number}`,
+      })),
+    })
+    class PagedS3 extends S3Request {
+      number = ''
+      override open = vi.fn<(method: string, url: string) => void>((_method, url) => {
+        this.number = url.split('/').at(-1)!
+      })
+      override async send(body: Blob) {
+        received.push(`${this.number}:${await body.text()}`)
+        this.status =
+          scenario === 'denied' || (scenario === 'renewed' && received.length === 1) ? 403 : 200
+        this.dispatchEvent(new Event('load'))
+      }
+    }
+    vi.stubGlobal('XMLHttpRequest', PagedS3)
+    vi.stubGlobal('fetch', async (path: string) => {
+      if (path === '/api/account') return Response.json(alice)
+      if (path === '/api/spaces/personal/elements') return Response.json([])
+      if (path === '/api/uploads') return Response.json(ticket([1], scenario === 'expired'))
+      if (path === '/api/uploads/paged') {
+        reads++
+        if (reads > 4) throw new Error('Unbounded resume loop')
+        return Response.json(
+          ticket(
+            scenario === 'no-progress' || scenario === 'denied'
+              ? [1]
+              : scenario === 'expired' || scenario === 'renewed'
+                ? [1, 2, 3]
+                : reads === 1
+                  ? [2]
+                  : [3],
+          ),
+        )
+      }
+      if (path === '/api/uploads/paged/complete') {
+        confirmed = true
+        return Response.json({ id: 'published' }, { status: 201 })
+      }
+      throw new Error(`Unexpected request: ${path}`)
+    })
+    const { page } = await open()
+    await chooseFile(page)
+    expect(page.get('aside').text()).toContain(status)
+    expect(confirmed).toBe(expectedConfirmation)
+    expect(received).toEqual(expected)
+    expect(reads).toBe(expectedReads)
+  },
+)
+
+it('stops one file without stopping its neighbor and never claims to undo interrupted publication', async () => {
+  const requests: S3Request[] = []
+  let declarations = 0
+  let finishConfirmation: ((response: Response) => void) | undefined
+  let completeSignal: AbortSignal | undefined
+  class WaitingS3 extends S3Request {
+    override send() {
+      requests.push(this)
+    }
+  }
+  vi.stubGlobal('XMLHttpRequest', WaitingS3)
+  vi.stubGlobal('fetch', async (path: string, options?: RequestInit) => {
+    if (path === '/api/account') return Response.json(alice)
+    if (path === '/api/spaces/personal/elements') return Response.json([])
+    if (path === '/api/uploads')
+      return Response.json({
+        id: `upload-${++declarations}`,
+        method: 'PUT',
+        headers: {},
+        partSize: 7,
+        parts: [{ number: 1, url: 'https://s3.example.test/signed' }],
+      })
+    if (path === '/api/uploads/upload-2/complete') {
+      completeSignal = options!.signal!
+      return new Promise<Response>((resolve) => {
+        finishConfirmation = resolve
+      })
+    }
+    if (path === '/api/uploads/upload-2')
+      return Response.json({ error: 'upload_not_found' }, { status: 404 })
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  const { page } = await open()
+  await chooseFile(page)
+  await chooseFile(page, 'voisin.txt')
+  const first = page.findAll('article')[0]!
+  const second = page.findAll('article')[1]!
+  const firstAbort = vi.spyOn(requests[0]!, 'abort')
+  const secondAbort = vi.spyOn(requests[1]!, 'abort')
+  await first.get('button').trigger('click')
+  expect(first.text()).toContain('Arrêté')
+  expect(firstAbort).toHaveBeenCalledOnce()
+  expect(secondAbort).not.toHaveBeenCalled()
+  requests[1]!.dispatchEvent(new Event('load'))
+  await flushPromises()
+  expect(second.text()).toContain('Finalisation')
+  await second.get('button').trigger('click')
+  expect(completeSignal!.aborted).toBe(true)
+  expect(second.text()).toContain('résultat inconnu')
+  finishConfirmation!(Response.json({ id: 'published' }, { status: 201 }))
+  await flushPromises()
+  expect(second.text()).not.toContain('Terminé')
+  await second.get('button').trigger('click')
+  await flushPromises()
+  expect(second.text()).toContain('résultat inconnu')
+  expect(second.find('button').exists()).toBe(false)
+  expect(declarations).toBe(2)
+})
+
+it.each([
+  { stage: 'resume', status: 403 },
+  { stage: 'resume', status: 401 },
+  { stage: 'complete', status: 403 },
+])('stops refused $stage work on HTTP $status without replay', async ({ stage, status }) => {
+  let puts = 0
+  let confirmations = 0
+  class RefusedS3 extends S3Request {
+    override send() {
+      puts++
+      this.dispatchEvent(new Event(stage === 'resume' ? 'error' : 'load'))
+    }
+  }
+  vi.stubGlobal('XMLHttpRequest', RefusedS3)
+  vi.stubGlobal('fetch', async (path: string) => {
+    if (path === '/api/account') return Response.json(alice)
+    if (path === '/api/spaces/personal/elements') return Response.json([])
+    if (path === '/api/uploads')
+      return Response.json({
+        id: 'refused',
+        method: 'PUT',
+        headers: {},
+        partSize: 7,
+        parts: [{ number: 1, url: 'https://s3.example.test/signed' }],
+      })
+    if (path === '/api/uploads/refused')
+      return Response.json({ error: 'write_forbidden' }, { status })
+    if (path === '/api/uploads/refused/complete') {
+      confirmations++
+      return Response.json({ error: 'write_forbidden' }, { status })
+    }
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  const { page } = await open()
+  await chooseFile(page)
+  if (stage === 'resume') {
+    await page.get('article button').trigger('click')
+    await flushPromises()
+  }
+  expect(puts).toBe(1)
+  expect(confirmations).toBe(stage === 'complete' ? 1 : 0)
+  expect(page.find('article button').exists()).toBe(false)
+  expect(page.text()).not.toContain('Terminé')
+  expect(page.find('input[name="identifier"]').exists()).toBe(status === 401)
 })

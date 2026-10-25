@@ -2,9 +2,9 @@
 
 Vue 3, Vue Router et Nuxt UI (plugin Vite, sans Nuxt), thème et composants
 partagés fournis par `@shelf/ui`. Connexion persistante et liste de la racine
-de l’espace personnel, ouverture des dossiers et premier envoi direct vers S3.
-La navigation détaillée, les lots/conflits et le multipart/reprise sont des
-extensions séparées.
+de l’espace personnel, ouverture des dossiers et envois directs vers S3, simples
+ou multipart avec reprise en mémoire. La navigation détaillée et les lots/conflits
+sont des extensions séparées.
 
 Depuis la racine du dépôt :
 
@@ -83,12 +83,31 @@ en cliquant sur son nom. Une erreur de confirmation ou une réponse perdue
 n’est pas un succès ; vérifier la destination avant un nouvel envoi. Un conflit
 de nom ne remplace jamais silencieusement l’existant.
 
-Cette tranche exécute le PUT simple. Un ticket nécessitant plusieurs parties
-affiche une erreur de capacité non encore disponible, sans imposer de limite
-métier de taille. Les fichiers et les requêtes restent uniquement en mémoire,
-hors état sérialisable Pinia ; les URL signées restent dans la portée du
-transfert. Aucune file persistante, reprise après rechargement ou nouvelle
-tentative automatique d’écriture après reconnexion n’est promise.
+Le ticket serveur décide du PUT simple ou des parties à envoyer. Chaque partie
+utilise ses numéros, URL et en-têtes, et la dernière ne contient que les octets
+restants. Les listes de parties manquantes sont relues jusqu’à épuisement, sans
+supposer qu’une seule réponse couvre le fichier. Une URL expirée ou refusée par
+S3 est renouvelée une fois sans progrès ; un refus persistant reste une erreur,
+sans boucle de réécriture. Une reprise qui redemande une partie déjà envoyée dans
+la tentative courante s’arrête également en erreur.
+
+« Réessayer » consulte d’abord la reprise serveur d’un transfert déclaré et ne
+renvoie que les parties manquantes ou incorrectes. Les octets affichés concernent
+la tentative courante, pas les parties déjà conservées par le serveur. « Arrêter »
+interrompt uniquement les requêtes du fichier choisi et permet de reprendre tant
+que son fichier reste en mémoire. Il ne révoque pas les URL signées, ne supprime
+pas un fichier publié et ne déclenche pas un nettoyage S3 immédiat : le mécanisme
+serveur existant nettoie ultérieurement les données temporaires.
+
+Une finalisation interrompue ou dont la réponse a été perdue reste « résultat
+inconnu ». Réessayer consulte le serveur ; un upload introuvable ne prouve ni
+une publication ni son absence. Aucune nouvelle déclaration automatique ne
+remplace ce résultat inconnu. Un refus d’accès arrête la reprise concernée.
+
+Les fichiers et les requêtes restent uniquement en mémoire, hors état sérialisable
+Pinia ; les URL signées restent dans la portée du transfert. Aucune file persistante,
+reprise après rechargement ou nouvelle tentative automatique d’écriture après
+reconnexion n’est promise.
 
 Une vérification de session du même compte ne coupe pas l’envoi. À détection
 d’une session refusée ou changée, les requêtes sont interrompues et les données
