@@ -17,11 +17,15 @@ export const useSession = defineStore('session', () => {
   const privacyEpoch = shallowRef(0)
   let generation = 0
   let version: string | null = null
+  let verifiedAccountId: string | null = null
   let verification: Promise<void> | undefined
 
   function clear(next: typeof status.value, preserveWork = false) {
     generation++
-    if (!preserveWork) privacyEpoch.value++
+    if (!preserveWork) {
+      privacyEpoch.value++
+      verifiedAccountId = null
+    }
     account.value = null
     status.value = next
   }
@@ -30,12 +34,13 @@ export const useSession = defineStore('session', () => {
     // Explicitly retain only public account fields, never a session secret.
     const { id, username, email, isAdmin, isActive } = value
     account.value = { id, username, email, isAdmin, isActive }
+    verifiedAccountId = id
     status.value = 'authenticated'
   }
 
   function verify() {
     if (verification) return verification
-    const previousId = account.value?.id
+    const previousId = verifiedAccountId
     clear('checking', true)
     const current = generation
     verification = (async () => {
@@ -50,7 +55,10 @@ export const useSession = defineStore('session', () => {
         }
       } catch (error) {
         if (current === generation) {
-          clear(error instanceof ApiError && error.status === 401 ? 'anonymous' : 'error')
+          const rejected = error instanceof ApiError && error.status === 401
+          // A failed check proves neither revocation nor an account switch. Mask
+          // the UI, but retain work until identity can be checked conclusively.
+          clear(rejected ? 'anonymous' : 'error', !rejected)
         }
       } finally {
         verification = undefined

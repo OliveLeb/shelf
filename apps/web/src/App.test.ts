@@ -356,9 +356,13 @@ it('keeps an upload in its original folder across navigation and publishes only 
 it.each(['network', 'name_conflict'])(
   'does not report success when confirmation fails: %s',
   async (failure) => {
+    let verificationFails = false
     vi.stubGlobal('XMLHttpRequest', S3Request)
     vi.stubGlobal('fetch', async (path: string) => {
-      if (path === '/api/account') return Response.json(alice)
+      if (path === '/api/account') {
+        if (verificationFails) throw new TypeError('Connection lost during verification')
+        return Response.json(alice)
+      }
       if (path === '/api/spaces/personal/elements') return Response.json([])
       if (path === '/api/uploads')
         return Response.json({
@@ -383,6 +387,16 @@ it.each(['network', 'name_conflict'])(
       failure === 'network' ? 'Publication non confirmée' : 'Aucun fichier n’a été remplacé',
     )
     expect(page.find('tbody').exists()).toBe(false)
+    verificationFails = true
+    window.dispatchEvent(new Event('focus'))
+    await flushPromises()
+    expect(page.get('[role="alert"]').text()).toContain('Impossible de vérifier votre session')
+    expect(page.find('aside').exists()).toBe(false)
+    verificationFails = false
+    await page.get('button').trigger('click')
+    await flushPromises()
+    expect(page.get('aside').text()).toContain('preuve.txt')
+    expect(page.get('aside').text()).toContain('Erreur')
   },
 )
 
