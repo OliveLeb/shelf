@@ -2,8 +2,9 @@
 
 Vue 3, Vue Router et Nuxt UI (plugin Vite, sans Nuxt), thème et composants
 partagés fournis par `@shelf/ui`. Connexion persistante et liste de la racine
-de l’espace personnel ; la navigation dans les dossiers et les transferts
-seront ajoutés séparément.
+de l’espace personnel, ouverture des dossiers et premier envoi direct vers S3.
+La navigation détaillée, les lots/conflits et le multipart/reprise sont des
+extensions séparées.
 
 Depuis la racine du dépôt :
 
@@ -43,7 +44,7 @@ des réponses API, et configurer `Authentication__ClientOrigin` avec cette
 origine exacte. `pnpm preview` n’est pas un serveur de production API.
 Voir [le transport des sessions](../../docs/authentication.md#transport-des-sessions-web-et-mobile).
 
-Pinia ne conserve que le compte courant et l’état de session. Les listes sont
+Le store de session Pinia ne conserve que le compte courant et son état. Les listes sont
 locales à la page et effacées quand la session est vérifiée, refusée ou quittée.
 Le cookie HttpOnly reste entièrement sous le contrôle du navigateur ; aucun
 secret n’est écrit dans les stockages JavaScript. La session est revérifiée
@@ -59,6 +60,41 @@ refusée avant envoi, même si l’événement n’est pas encore arrivé, sans 
 Le stockage local doit être accessible ; sinon les requêtes échouent sans envoi.
 Sans Web Locks, la sérialisation entre onglets n’est pas garantie ; les contrôles
 serveur restent actifs.
+
+## Envoi d’un fichier
+
+Ouvrir la racine ou un dossier personnel, puis « Envoyer un fichier ». Le store
+`useTransfers` possède l’opération au-delà de la page : destination capturée,
+progression et erreur restent consultables dans le suivi global. Il ne conserve
+aucune liste. Les octets passent directement du navigateur au S3 par PUT signé,
+avec les en-têtes fournis par l’API et sans cookies API (`withCredentials=false`).
+Seules la déclaration et la confirmation utilisent le transport API habituel.
+
+Configurer le [CORS MinIO local](../../infra/README.md#origine-du-navigateur-et-envois-directs)
+sur la même origine HTTPS exacte que le web. Dans l’orb, `.amp/services.yaml`
+fixe `https://localhost:3000` ; adapter cette valeur et redémarrer le service
+local si le navigateur utilise une autre origine. L’endpoint S3 signé doit
+être accessible au navigateur lui-même, pas seulement à l’API.
+
+Après le PUT, « Finalisation » dure jusqu’à la réponse de confirmation serveur.
+Seule une confirmation réussie marque le transfert terminé et actualise sa
+destination si elle est affichée. Le fichier confirmé peut être téléchargé
+en cliquant sur son nom. Une erreur de confirmation ou une réponse perdue
+n’est pas un succès ; vérifier la destination avant un nouvel envoi. Un conflit
+de nom ne remplace jamais silencieusement l’existant.
+
+Cette tranche exécute le PUT simple. Un ticket nécessitant plusieurs parties
+affiche une erreur de capacité non encore disponible, sans imposer de limite
+métier de taille. Les fichiers et les requêtes restent uniquement en mémoire,
+hors état sérialisable Pinia ; les URL signées restent dans la portée du
+transfert. Aucune file persistante, reprise après rechargement ou nouvelle
+tentative automatique d’écriture après reconnexion n’est promise.
+
+Une vérification de session du même compte ne coupe pas l’envoi. À détection
+d’une session refusée ou changée, les requêtes sont interrompues et les données
+privées effacées. La déconnexion volontaire demande confirmation si un envoi
+est actif. Cela ne revient pas sur une publication serveur déjà confirmée ;
+interrompre une confirmation dont la réponse manque laisse son résultat inconnu.
 
 `vp run typecheck` construit l'application avant `vue-tsc` : le plugin Nuxt UI
 génère pendant le build les déclarations `components.d.ts` et `auto-imports.d.ts`

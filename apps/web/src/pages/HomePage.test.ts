@@ -26,7 +26,10 @@ it('retries a failed root listing and displays the real elements', async () => {
   )
   const router = createRouter({
     history: createMemoryHistory(),
-    routes: [{ path: '/', component: HomePage }],
+    routes: [
+      { path: '/', component: HomePage },
+      { path: '/dossiers/:folderId', name: 'folder', component: HomePage },
+    ],
   })
   await router.push('/')
   const page = mount(HomePage, { global: { plugins: [createPinia(), router] } })

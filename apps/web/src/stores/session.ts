@@ -14,12 +14,14 @@ export const useSession = defineStore('session', () => {
   const account = shallowRef<Account | null>(null)
   const status = shallowRef<'checking' | 'authenticated' | 'anonymous' | 'error'>('checking')
   const logoutFailed = shallowRef(false)
+  const privacyEpoch = shallowRef(0)
   let generation = 0
   let version: string | null = null
   let verification: Promise<void> | undefined
 
-  function clear(next: typeof status.value) {
+  function clear(next: typeof status.value, preserveWork = false) {
     generation++
+    if (!preserveWork) privacyEpoch.value++
     account.value = null
     status.value = next
   }
@@ -33,12 +35,16 @@ export const useSession = defineStore('session', () => {
 
   function verify() {
     if (verification) return verification
-    clear('checking')
+    const previousId = account.value?.id
+    clear('checking', true)
     const current = generation
     verification = (async () => {
       try {
         const result = await api<Account>('/account')
         if (current === generation) {
+          // A focus check may unmount pages, but does not end same-session work.
+          if ((previousId && previousId !== result.value.id) || version !== result.version)
+            privacyEpoch.value++
           version = result.version
           accept(result.value)
         }
@@ -93,13 +99,13 @@ export const useSession = defineStore('session', () => {
   }
 
   async function request<T>(path: string, options?: RequestInit) {
-    const current = generation
+    const current = privacyEpoch.value
     try {
       const result = await api<T>(path, options, version)
-      if (current !== generation) throw new DOMException('Session changed', 'AbortError')
+      if (current !== privacyEpoch.value) throw new DOMException('Session changed', 'AbortError')
       return result.value
     } catch (error) {
-      if (current === generation) {
+      if (current === privacyEpoch.value) {
         if (error instanceof SessionChangedError) await invalidate()
         else if (error instanceof ApiError && error.status === 401) clear('anonymous')
       }
@@ -107,5 +113,5 @@ export const useSession = defineStore('session', () => {
     }
   }
 
-  return { account, status, logoutFailed, verify, invalidate, login, logout, request }
+  return { account, status, logoutFailed, privacyEpoch, verify, invalidate, login, logout, request }
 })

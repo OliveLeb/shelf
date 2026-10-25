@@ -270,3 +270,162 @@ it.each([
   const { router } = await open(`/connexion?retour=${encodeURIComponent(retour)}`)
   expect(router.currentRoute.value.fullPath).toBe(expected)
 })
+
+class S3Request extends EventTarget {
+  upload = new EventTarget()
+  status = 200
+  withCredentials = false
+  open = vi.fn<(method: string, url: string) => void>()
+  setRequestHeader = vi.fn<(name: string, value: string) => void>()
+  send(_body: Blob) {
+    this.dispatchEvent(new Event('load'))
+  }
+  abort() {
+    this.dispatchEvent(new Event('abort'))
+  }
+}
+
+async function chooseFile(page: Awaited<ReturnType<typeof open>>['page']) {
+  const input = page.get('input[type="file"]')
+  Object.defineProperty(input.element, 'files', {
+    value: [new File(['bonjour'], 'preuve.txt', { type: 'text/plain' })],
+  })
+  await input.trigger('change')
+  await flushPromises()
+}
+
+it('keeps an upload in its original folder across navigation and publishes only after confirmation', async () => {
+  const folderA = { ...folder, id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', name: 'Dossier A' }
+  let confirm: ((response: Response) => void) | undefined
+  let published = false
+  let declaration: unknown
+  class CheckedS3 extends S3Request {
+    override send(body: Blob) {
+      expect(body.size).toBe(7)
+      expect(this.withCredentials).toBe(false)
+      super.send(body)
+    }
+  }
+  vi.stubGlobal('XMLHttpRequest', CheckedS3)
+  vi.stubGlobal('fetch', async (path: string, options?: RequestInit) => {
+    if (path === '/api/account') return Response.json(alice)
+    if (path === '/api/spaces/personal/elements') return Response.json([folderA])
+    if (path === `/api/folders/${folderA.id}/elements`)
+      return Response.json(published ? [{ ...folder, kind: 'file', name: 'preuve.txt' }] : [])
+    if (path === '/api/uploads') {
+      declaration = JSON.parse(options!.body as string)
+      return Response.json({
+        id: 'upload',
+        method: 'PUT',
+        headers: { 'Content-Type': 'text/plain' },
+        partSize: 7,
+        parts: [{ number: 1, url: 'https://s3.example.test/signed' }],
+      })
+    }
+    if (path === '/api/uploads/upload/complete')
+      return new Promise<Response>((resolve) => {
+        confirm = (response) => {
+          published = true
+          resolve(response)
+        }
+      })
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  const { page, router } = await open()
+  await page.get('a[href*="/dossiers/"]').trigger('click')
+  await flushPromises()
+  await chooseFile(page)
+  expect(declaration).toMatchObject({ parentId: folderA.id, name: 'preuve.txt', size: 7 })
+  expect(page.text()).toContain('Finalisation')
+  expect(page.find('tbody').exists()).toBe(false)
+  window.dispatchEvent(new Event('focus'))
+  await flushPromises()
+  expect(page.text()).toContain('Finalisation')
+  await router.push('/')
+  await flushPromises()
+  expect(page.text()).toContain('Finalisation')
+  confirm!(Response.json({ id: 'new-file' }, { status: 201 }))
+  await flushPromises()
+  expect(page.text()).toContain('Terminé')
+  expect(page.get('tbody').text()).not.toContain('preuve.txt')
+  await router.push(`/dossiers/${folderA.id}?nom=Dossier+A`)
+  await flushPromises()
+  expect(page.get('tbody').text()).toContain('preuve.txt')
+})
+
+it.each(['network', 'name_conflict'])(
+  'does not report success when confirmation fails: %s',
+  async (failure) => {
+    vi.stubGlobal('XMLHttpRequest', S3Request)
+    vi.stubGlobal('fetch', async (path: string) => {
+      if (path === '/api/account') return Response.json(alice)
+      if (path === '/api/spaces/personal/elements') return Response.json([])
+      if (path === '/api/uploads')
+        return Response.json({
+          id: 'upload',
+          method: 'PUT',
+          headers: { 'Content-Type': 'text/plain' },
+          partSize: 7,
+          parts: [{ number: 1, url: 'https://s3.example.test/signed' }],
+        })
+      if (path === '/api/uploads/upload/complete') {
+        if (failure === 'network') throw new TypeError('Connection lost')
+        return Response.json({ error: failure }, { status: 409 })
+      }
+      throw new Error(`Unexpected request: ${path}`)
+    })
+    const { page } = await open()
+    await chooseFile(page)
+    expect(page.get('aside').text()).toContain('Erreur')
+    expect(page.get('aside').text()).toContain('preuve.txt')
+    expect(page.get('aside').text()).not.toContain('Terminé')
+    expect(page.get('[role="alert"]').text()).toContain(
+      failure === 'network' ? 'Publication non confirmée' : 'Aucun fichier n’a été remplacé',
+    )
+    expect(page.find('tbody').exists()).toBe(false)
+  },
+)
+
+it('interrupts revoked-session uploads and never carries them into the next account', async () => {
+  let revoked = false
+  let interrupted = false
+  class PendingS3 extends S3Request {
+    override send() {}
+    override abort() {
+      interrupted = true
+      super.abort()
+    }
+  }
+  vi.stubGlobal('XMLHttpRequest', PendingS3)
+  vi.stubGlobal('fetch', async (path: string) => {
+    if (path === '/api/account')
+      return revoked ? new Response(null, { status: 401 }) : Response.json(alice)
+    if (path === '/api/spaces/personal/elements') return Response.json([])
+    if (path === '/api/auth/web/login')
+      return Response.json({ ...alice, id: 'bob', username: 'Bob' })
+    if (path === '/api/uploads')
+      return Response.json({
+        id: 'upload',
+        method: 'PUT',
+        headers: {},
+        partSize: 7,
+        parts: [{ number: 1, url: 'https://s3.example.test/signed' }],
+      })
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  const { page } = await open()
+  await chooseFile(page)
+  expect(page.get('aside').text()).toContain('preuve.txt')
+  revoked = true
+  window.dispatchEvent(new Event('focus'))
+  await flushPromises()
+  expect(interrupted).toBe(true)
+  expect(page.find('aside').exists()).toBe(false)
+  await page.get('input[name="identifier"]').setValue('Bob')
+  await page.get('input[name="password"]').setValue('another-account-password')
+  await page.get('form').trigger('submit')
+  await flushPromises()
+  expect(page.text()).toContain('Bob')
+  expect(page.text()).not.toContain('preuve.txt')
+  expect(page.find('aside').exists()).toBe(false)
+})
