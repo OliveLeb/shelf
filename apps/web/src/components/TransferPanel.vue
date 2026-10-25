@@ -10,6 +10,8 @@ const labels: Record<Transfer['status'], string> = {
   finalizing: 'Finalisation',
   completed: 'Terminé',
   error: 'Erreur',
+  stopped: 'Arrêté',
+  unknown: 'Erreur — résultat inconnu',
 }
 const bytes = new Intl.NumberFormat('fr-FR', {
   style: 'unit',
@@ -87,13 +89,36 @@ const bytes = new Intl.NumberFormat('fr-FR', {
             />
           </div>
           <p v-if="item.status === 'uploading'" class="text-xs text-muted">
-            {{ bytes.format(item.loaded) }} / {{ bytes.format(item.size) }}
+            {{ bytes.format(item.loaded) }} envoyés pendant cette tentative /
+            {{ bytes.format(item.size) }}
           </p>
           <p v-if="item.error" role="alert" class="text-sm text-error">{{ item.error }}</p>
+          <div class="flex flex-wrap gap-2">
+            <UButton
+              v-if="['declaring', 'uploading', 'finalizing'].includes(item.status)"
+              color="neutral"
+              variant="outline"
+              size="sm"
+              v-bind="{ 'aria-label': `Arrêter l’envoi de ${item.name}` }"
+              @click="transfers.stop(item.id)"
+              >Arrêter</UButton
+            >
+            <UButton
+              v-if="item.canRetry"
+              color="neutral"
+              variant="outline"
+              size="sm"
+              v-bind="{ 'aria-label': `Réessayer l’envoi de ${item.name}` }"
+              @click="transfers.retry(item.id)"
+              >Réessayer</UButton
+            >
+          </div>
         </article>
       </div>
       <p class="mt-3 text-xs text-muted">
         Gardez cette application ouverte. Fermer ou recharger ne permet pas de reprendre les envois.
+        Arrêter interrompt ce navigateur, sans révoquer les URL déjà délivrées ni annuler un fichier
+        publié. Le serveur nettoie ultérieurement les données temporaires.
       </p>
     </div>
   </aside>
