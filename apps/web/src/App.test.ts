@@ -285,14 +285,67 @@ class S3Request extends EventTarget {
   }
 }
 
-async function chooseFile(page: Awaited<ReturnType<typeof open>>['page']) {
+async function chooseFile(
+  page: Awaited<ReturnType<typeof open>>['page'],
+  files = [new File(['bonjour'], 'preuve.txt', { type: 'text/plain' })],
+) {
   const input = page.get('input[type="file"]')
   Object.defineProperty(input.element, 'files', {
-    value: [new File(['bonjour'], 'preuve.txt', { type: 'text/plain' })],
+    value: files,
+    configurable: true,
   })
   await input.trigger('change')
   await flushPromises()
 }
+
+it('reports independent batch results and keeps its captured destination after navigation', async () => {
+  const folderId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+  const published: { name: string; parentId: string | null }[] = []
+  let release: (() => void) | undefined
+  vi.stubGlobal('XMLHttpRequest', S3Request)
+  vi.stubGlobal('fetch', async (path: string, options?: RequestInit) => {
+    if (path === '/api/account') return Response.json(alice)
+    if (path === '/api/spaces/personal/elements') return Response.json([folder])
+    if (path === `/api/folders/${folderId}/elements`) return Response.json([])
+    if (path === '/api/uploads') {
+      const input = JSON.parse(options!.body as string)
+      if (input.name === 'refus.txt')
+        return Response.json({ error: 'invalid_name' }, { status: 400 })
+      published.push({ name: input.name, parentId: input.parentId })
+      return Response.json({
+        id: input.name,
+        method: 'PUT',
+        headers: {},
+        partSize: 7,
+        parts: [{ number: 1, url: 'https://s3.example.test/signed' }],
+      })
+    }
+    if (path === '/api/uploads/premier.txt/complete')
+      return new Promise<Response>((resolve) => {
+        release = () => resolve(Response.json({ name: 'premier.txt' }))
+      })
+    if (path === '/api/uploads/dernier.txt/complete') return Response.json({ name: 'dernier.txt' })
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  const { page, router } = await open(`/dossiers/${folderId}?nom=Archives`)
+  await chooseFile(page, [
+    new File(['a'], 'premier.txt'),
+    new File(['bb'], 'refus.txt'),
+    new File(['ccc'], 'dernier.txt'),
+  ])
+  await router.push('/')
+  await flushPromises()
+  release!()
+  await flushPromises()
+  expect(published).toEqual([
+    { name: 'premier.txt', parentId: folderId },
+    { name: 'dernier.txt', parentId: folderId },
+  ])
+  expect(page.get('aside').text()).toContain('Réussites : 2')
+  expect(page.get('aside').text()).toContain('Échecs : 1')
+  expect(page.get('aside').text()).toContain('Ignorés : 0')
+  expect(page.get('aside').text()).toContain('Espace personnel / Archives')
+})
 
 it('keeps an upload in its original folder across navigation and publishes only after confirmation', async () => {
   const folderA = { ...folder, id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', name: 'Dossier A' }
@@ -344,7 +397,7 @@ it('keeps an upload in its original folder across navigation and publishes only 
   await router.push('/')
   await flushPromises()
   expect(page.text()).toContain('Finalisation')
-  confirm!(Response.json({ id: 'new-file' }, { status: 201 }))
+  confirm!(Response.json({ id: 'new-file', name: 'preuve.txt' }, { status: 201 }))
   await flushPromises()
   expect(page.text()).toContain('Terminé')
   expect(page.get('tbody').text()).not.toContain('preuve.txt')
@@ -353,52 +406,130 @@ it('keeps an upload in its original folder across navigation and publishes only 
   expect(page.get('tbody').text()).toContain('preuve.txt')
 })
 
-it.each(['network', 'name_conflict'])(
-  'does not report success when confirmation fails: %s',
-  async (failure) => {
-    let verificationFails = false
-    vi.stubGlobal('XMLHttpRequest', S3Request)
-    vi.stubGlobal('fetch', async (path: string) => {
-      if (path === '/api/account') {
-        if (verificationFails) throw new TypeError('Connection lost during verification')
-        return Response.json(alice)
-      }
-      if (path === '/api/spaces/personal/elements') return Response.json([])
-      if (path === '/api/uploads')
-        return Response.json({
-          id: 'upload',
-          method: 'PUT',
-          headers: { 'Content-Type': 'text/plain' },
-          partSize: 7,
-          parts: [{ number: 1, url: 'https://s3.example.test/signed' }],
+it('retains an unconfirmed upload across a failed session check without reporting success', async () => {
+  let verificationFails = false
+  vi.stubGlobal('XMLHttpRequest', S3Request)
+  vi.stubGlobal('fetch', async (path: string) => {
+    if (path === '/api/account') {
+      if (verificationFails) throw new TypeError('Connection lost during verification')
+      return Response.json(alice)
+    }
+    if (path === '/api/spaces/personal/elements') return Response.json([])
+    if (path === '/api/uploads')
+      return Response.json({
+        id: 'upload',
+        method: 'PUT',
+        headers: { 'Content-Type': 'text/plain' },
+        partSize: 7,
+        parts: [{ number: 1, url: 'https://s3.example.test/signed' }],
+      })
+    if (path === '/api/uploads/upload/complete') {
+      throw new TypeError('Connection lost')
+    }
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  const { page } = await open()
+  await chooseFile(page)
+  expect(page.get('aside').text()).toContain('Erreur')
+  expect(page.get('aside').text()).toContain('preuve.txt')
+  expect(page.get('aside').text()).not.toContain('Terminé')
+  expect(page.get('[role="alert"]').text()).toContain('Publication non confirmée')
+  expect(page.find('tbody').exists()).toBe(false)
+  verificationFails = true
+  window.dispatchEvent(new Event('focus'))
+  await flushPromises()
+  expect(page.get('[role="alert"]').text()).toContain('Impossible de vérifier votre session')
+  expect(page.find('aside').exists()).toBe(false)
+  verificationFails = false
+  await page.get('button').trigger('click')
+  await flushPromises()
+  expect(page.get('aside').text()).toContain('preuve.txt')
+  expect(page.get('aside').text()).toContain('Erreur')
+})
+
+it('resolves late and queued conflicts for one batch without replaying confirmed files or choosing for another batch', async () => {
+  const existing = new Map([['other.txt', 'old']])
+  const tickets = new Map<string, { name: string; onConflict?: string }>()
+  let next = 0
+  let releaseConflict: (() => void) | undefined
+  vi.stubGlobal('XMLHttpRequest', S3Request)
+  vi.stubGlobal('fetch', async (path: string, options?: RequestInit) => {
+    if (path === '/api/account') return Response.json(alice)
+    if (path === '/api/spaces/personal/elements')
+      return Response.json(
+        Array.from(existing, ([name]) => ({ ...folder, id: name, kind: 'file', name })),
+      )
+    if (path === '/api/uploads') {
+      const input = JSON.parse(options!.body as string)
+      if (input.name === 'other.txt' && !input.onConflict)
+        return new Promise<Response>((resolve) => {
+          releaseConflict = () =>
+            resolve(Response.json({ error: 'name_conflict' }, { status: 409 }))
         })
-      if (path === '/api/uploads/upload/complete') {
-        if (failure === 'network') throw new TypeError('Connection lost')
-        return Response.json({ error: failure }, { status: 409 })
+      if (existing.has(input.name) && !input.onConflict)
+        return Response.json({ error: 'name_conflict' }, { status: 409 })
+      const id = String(++next)
+      tickets.set(id, input)
+      return Response.json({
+        id,
+        method: 'PUT',
+        headers: {},
+        partSize: 7,
+        parts: [{ number: 1, url: 'https://s3.example.test/signed' }],
+      })
+    }
+    const id = path.match(/^\/api\/uploads\/(.+)\/complete$/)?.[1]
+    if (id) {
+      const input = tickets.get(id)!
+      if (input.name === 'late.txt' && !input.onConflict) {
+        existing.set('late.txt', 'concurrent file')
+        return Response.json({ error: 'name_conflict' }, { status: 409 })
       }
-      throw new Error(`Unexpected request: ${path}`)
-    })
-    const { page } = await open()
-    await chooseFile(page)
-    expect(page.get('aside').text()).toContain('Erreur')
-    expect(page.get('aside').text()).toContain('preuve.txt')
-    expect(page.get('aside').text()).not.toContain('Terminé')
-    expect(page.get('[role="alert"]').text()).toContain(
-      failure === 'network' ? 'Publication non confirmée' : 'Aucun fichier n’a été remplacé',
-    )
-    expect(page.find('tbody').exists()).toBe(false)
-    verificationFails = true
-    window.dispatchEvent(new Event('focus'))
-    await flushPromises()
-    expect(page.get('[role="alert"]').text()).toContain('Impossible de vérifier votre session')
-    expect(page.find('aside').exists()).toBe(false)
-    verificationFails = false
-    await page.get('button').trigger('click')
-    await flushPromises()
-    expect(page.get('aside').text()).toContain('preuve.txt')
-    expect(page.get('aside').text()).toContain('Erreur')
-  },
-)
+      const name = existing.has(input.name) ? input.name.replace('.txt', ' (1).txt') : input.name
+      existing.set(name, 'new')
+      return Response.json({ name })
+    }
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  const { page } = await open()
+  await chooseFile(page, [
+    new File(['a'], 'valid.txt'),
+    new File(['bb'], 'late.txt'),
+    new File(['ccc'], 'other.txt'),
+  ])
+  expect(page.get('aside').text()).toContain('Conflit de nom')
+  expect(page.get('aside').text()).toContain('Réussites : 1')
+  const dialog = document.querySelector('[role="dialog"]')!
+  expect(dialog.textContent).toContain('late.txt')
+  dialog.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click()
+  dialog.querySelector<HTMLFormElement>('form')!.requestSubmit()
+  await flushPromises()
+  expect(page.get('aside').text()).toContain('Réussites : 2')
+  releaseConflict!()
+  await flushPromises()
+  expect(page.get('aside').text()).toContain('Réussites : 3')
+  expect(page.get('aside').text()).toContain('late (1).txt')
+  expect(Array.from(existing.keys())).toEqual([
+    'other.txt',
+    'valid.txt',
+    'late.txt',
+    'late (1).txt',
+    'other (1).txt',
+  ])
+
+  await chooseFile(page, [new File(['different'], 'other.txt')])
+  releaseConflict!()
+  await flushPromises()
+  const second = document.querySelector('[role="dialog"]')!
+  expect(second.textContent).toContain('other.txt')
+  second.querySelector<HTMLInputElement>('input[value="skip"]')!.click()
+  await flushPromises()
+  second.querySelector<HTMLFormElement>('form')!.requestSubmit()
+  await flushPromises()
+  expect(page.get('aside').text()).toContain('Ignorés : 1')
+  expect(existing.get('other.txt')).toBe('old')
+  expect(existing.size).toBe(5)
+})
 
 it('interrupts revoked-session uploads and never carries them into the next account', async () => {
   let revoked = false

@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ApiError } from '../api'
+import BatchUploadInput from '../components/BatchUploadInput.vue'
 import { useSession } from '../stores/session'
 import { useTransfers } from '../stores/transfers'
 
@@ -72,11 +73,9 @@ async function load() {
   }
 }
 
-function selectFile(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (file) void transfers.start(file, { parentId: parentId.value, label: destinationLabel.value })
-  input.value = ''
+function selectFiles(files: File[]) {
+  if (loading.value || error.value) return
+  void transfers.startBatch(files, { parentId: parentId.value, label: destinationLabel.value })
 }
 
 async function download(id: string) {
@@ -94,6 +93,7 @@ watch(
   (event) => {
     if (event && event.parentId === parentId.value) void load()
   },
+  { flush: 'sync' },
 )
 onMounted(load)
 onUnmounted(() => controller?.abort())
@@ -113,19 +113,6 @@ onUnmounted(() => controller?.abort())
         <p class="mt-2 text-sm text-muted">Destination de l’envoi : {{ destinationLabel }}</p>
       </div>
       <div class="flex items-center gap-2">
-        <label
-          class="relative inline-flex cursor-pointer items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm font-medium text-inverted hover:bg-primary/90 focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-primary has-disabled:cursor-not-allowed has-disabled:opacity-50"
-        >
-          <UIcon name="i-lucide-upload" class="size-4" />
-          Envoyer un fichier
-          <input
-            type="file"
-            aria-label="Envoyer un fichier"
-            class="absolute inset-0 w-full cursor-pointer opacity-0"
-            :disabled="loading || error"
-            @change="selectFile"
-          />
-        </label>
         <UButton
           color="neutral"
           variant="ghost"
@@ -136,6 +123,11 @@ onUnmounted(() => controller?.abort())
         />
       </div>
     </div>
+    <BatchUploadInput
+      :destination-label="destinationLabel"
+      :disabled="loading || error"
+      @files="selectFiles"
+    />
     <p v-if="downloadError" role="alert" class="mb-4 text-sm text-error">
       Impossible de préparer le téléchargement.
     </p>
