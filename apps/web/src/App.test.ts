@@ -527,6 +527,13 @@ it.each([
     confirmed: true,
   },
   {
+    scenario: 'renewed',
+    expected: ['1:bon', '1:bon', '2:jou', '3:r'],
+    status: 'Terminé',
+    reads: 1,
+    confirmed: true,
+  },
+  {
     scenario: 'denied',
     expected: ['1:bon', '1:bon'],
     status: 'Erreur',
@@ -535,7 +542,7 @@ it.each([
   },
   { scenario: 'no-progress', expected: ['1:bon'], status: 'Erreur', reads: 1, confirmed: false },
 ])(
-  'handles multipart %s without unbounded writes',
+  'handles multipart $scenario without unbounded writes',
   async ({ scenario, expected, status, reads: expectedReads, confirmed: expectedConfirmation }) => {
     const received: string[] = []
     let reads = 0
@@ -546,7 +553,10 @@ it.each([
       headers: {},
       partSize: 3,
       expiresAt: expired ? '2000-01-01T00:00:00Z' : '2099-01-01T00:00:00Z',
-      parts: numbers.map((number) => ({ number, url: `https://s3.example.test/${number}` })),
+      parts: numbers.map((number) => ({
+        number,
+        url: `https://s3.example.test/${reads ? 'renewed' : 'initial'}/${number}`,
+      })),
     })
     class PagedS3 extends S3Request {
       number = ''
@@ -555,7 +565,8 @@ it.each([
       })
       override async send(body: Blob) {
         received.push(`${this.number}:${await body.text()}`)
-        this.status = scenario === 'denied' ? 403 : 200
+        this.status =
+          scenario === 'denied' || (scenario === 'renewed' && received.length === 1) ? 403 : 200
         this.dispatchEvent(new Event('load'))
       }
     }
@@ -571,7 +582,7 @@ it.each([
           ticket(
             scenario === 'no-progress' || scenario === 'denied'
               ? [1]
-              : scenario === 'expired'
+              : scenario === 'expired' || scenario === 'renewed'
                 ? [1, 2, 3]
                 : reads === 1
                   ? [2]
@@ -651,4 +662,50 @@ it('stops one file without stopping its neighbor and never claims to undo interr
   expect(second.text()).toContain('résultat inconnu')
   expect(second.find('button').exists()).toBe(false)
   expect(declarations).toBe(2)
+})
+
+it.each([
+  { stage: 'resume', status: 403 },
+  { stage: 'resume', status: 401 },
+  { stage: 'complete', status: 403 },
+])('stops refused $stage work on HTTP $status without replay', async ({ stage, status }) => {
+  let puts = 0
+  let confirmations = 0
+  class RefusedS3 extends S3Request {
+    override send() {
+      puts++
+      this.dispatchEvent(new Event(stage === 'resume' ? 'error' : 'load'))
+    }
+  }
+  vi.stubGlobal('XMLHttpRequest', RefusedS3)
+  vi.stubGlobal('fetch', async (path: string) => {
+    if (path === '/api/account') return Response.json(alice)
+    if (path === '/api/spaces/personal/elements') return Response.json([])
+    if (path === '/api/uploads')
+      return Response.json({
+        id: 'refused',
+        method: 'PUT',
+        headers: {},
+        partSize: 7,
+        parts: [{ number: 1, url: 'https://s3.example.test/signed' }],
+      })
+    if (path === '/api/uploads/refused')
+      return Response.json({ error: 'write_forbidden' }, { status })
+    if (path === '/api/uploads/refused/complete') {
+      confirmations++
+      return Response.json({ error: 'write_forbidden' }, { status })
+    }
+    throw new Error(`Unexpected request: ${path}`)
+  })
+  const { page } = await open()
+  await chooseFile(page)
+  if (stage === 'resume') {
+    await page.get('article button').trigger('click')
+    await flushPromises()
+  }
+  expect(puts).toBe(1)
+  expect(confirmations).toBe(stage === 'complete' ? 1 : 0)
+  expect(page.find('article button').exists()).toBe(false)
+  expect(page.text()).not.toContain('Terminé')
+  expect(page.find('input[name="identifier"]').exists()).toBe(status === 401)
 })
