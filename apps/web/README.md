@@ -61,12 +61,15 @@ Le stockage local doit être accessible ; sinon les requêtes échouent sans env
 Sans Web Locks, la sérialisation entre onglets n’est pas garantie ; les contrôles
 serveur restent actifs.
 
-## Envoi d’un fichier
+## Envoi de fichiers par lot
 
-Ouvrir la racine ou un dossier personnel, puis « Envoyer un fichier ». Le store
-`useTransfers` possède l’opération au-delà de la page : destination capturée,
-progression et erreur restent consultables dans le suivi global. Il ne conserve
-aucune liste. Les octets passent directement du navigateur au S3 par PUT signé,
+Ouvrir la racine ou un dossier personnel, puis « Choisir des fichiers » ou déposer
+des fichiers depuis l’ordinateur dans la zone d’envoi. Les dossiers locaux sont
+refusés, sans parcours récursif. Le store `useTransfers` possède chaque lot au-delà
+de la page : destination capturée, progression et résultats indépendants restent
+consultables dans le suivi global. Une erreur ou un conflit ne bloque pas les
+autres fichiers. Il ne conserve aucune liste de dossiers. Les octets passent
+directement du navigateur au S3 par PUT signé,
 avec les en-têtes fournis par l’API et sans cookies API (`withCredentials=false`).
 Seules la déclaration et la confirmation utilisent le transport API habituel.
 
@@ -80,8 +83,15 @@ Après le PUT, « Finalisation » dure jusqu’à la réponse de confirmation se
 Seule une confirmation réussie marque le transfert terminé et actualise sa
 destination si elle est affichée. Le fichier confirmé peut être téléchargé
 en cliquant sur son nom. Une erreur de confirmation ou une réponse perdue
-n’est pas un succès ; vérifier la destination avant un nouvel envoi. Un conflit
-de nom ne remplace jamais silencieusement l’existant.
+n’est pas un succès ; vérifier la destination avant un nouvel envoi.
+
+Un conflit de nom, même apparu à la confirmation, propose « Garder les deux »
+(présélectionné), « Remplacer » et « Ignorer ». Le nom final vient du serveur ;
+remplacer conserve l’ancien contenu dans la corbeille. Le choix peut s’appliquer
+aux conflits suivants du même lot, jamais aux autres lots ou aux déplacements
+internes. Un dossier de même nom ne peut pas être remplacé. Seul le fichier en
+conflit est redéclaré avec le choix explicite ; les fichiers déjà confirmés ne
+sont pas rejoués et l’ancien envoi non confirmé expire côté serveur.
 
 Cette tranche exécute le PUT simple. Un ticket nécessitant plusieurs parties
 affiche une erreur de capacité non encore disponible, sans imposer de limite

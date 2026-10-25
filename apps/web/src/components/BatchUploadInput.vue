@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { shallowRef, useTemplateRef } from 'vue'
 
-defineProps<{ destinationLabel: string }>()
+const { destinationLabel, disabled = false } = defineProps<{
+  destinationLabel: string
+  disabled?: boolean
+}>()
 const emit = defineEmits<{ files: [files: File[]] }>()
 const picker = useTemplateRef<HTMLInputElement>('picker')
 const dragging = shallowRef(false)
@@ -9,6 +12,7 @@ const rejectedFolders = shallowRef(false)
 
 function select(event: Event) {
   const input = event.target as HTMLInputElement
+  if (disabled) return
   rejectedFolders.value = false
   const files = Array.from(input.files ?? []).filter((file) => {
     if (!file.webkitRelativePath) return true
@@ -26,6 +30,7 @@ function external(event: DragEvent) {
 function over(event: DragEvent) {
   if (!external(event)) return
   event.preventDefault()
+  if (disabled) return
   if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
   dragging.value = true
 }
@@ -43,13 +48,14 @@ function drop(event: DragEvent) {
   if (!external(event)) return
   event.preventDefault()
   dragging.value = false
+  if (disabled) return
   rejectedFolders.value = false
   const files: File[] = []
   // Read entries during the drop event; never traverse a local directory.
   for (const item of Array.from(event.dataTransfer?.items ?? [])) {
     if (item.kind !== 'file') continue
     const entry = item.webkitGetAsEntry?.()
-    if (entry?.isDirectory) {
+    if (!entry || entry.isDirectory) {
       rejectedFolders.value = true
       continue
     }
@@ -78,11 +84,14 @@ function drop(event: DragEvent) {
           Déposez des fichiers depuis votre ordinateur ou utilisez le sélecteur.
         </p>
       </div>
-      <UButton icon="i-lucide-upload" @click="picker?.click()">Choisir des fichiers</UButton>
+      <UButton icon="i-lucide-upload" :disabled="disabled" @click="picker?.click()"
+        >Choisir des fichiers</UButton
+      >
       <input
         ref="picker"
         type="file"
         multiple
+        :disabled="disabled"
         class="sr-only"
         tabindex="-1"
         aria-label="Choisir des fichiers à envoyer"
