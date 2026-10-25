@@ -403,6 +403,7 @@ it.each(['network', 'name_conflict'])(
 it('interrupts revoked-session uploads and never carries them into the next account', async () => {
   let revoked = false
   let interrupted = false
+  const folderId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
   class PendingS3 extends S3Request {
     override send() {}
     override abort() {
@@ -415,6 +416,8 @@ it('interrupts revoked-session uploads and never carries them into the next acco
     if (path === '/api/account')
       return revoked ? new Response(null, { status: 401 }) : Response.json(alice)
     if (path === '/api/spaces/personal/elements') return Response.json([])
+    if (path === `/api/folders/${folderId}/elements`)
+      return revoked ? new Response(null, { status: 404 }) : Response.json([])
     if (path === '/api/auth/web/login')
       return Response.json({ ...alice, id: 'bob', username: 'Bob' })
     if (path === '/api/uploads')
@@ -427,7 +430,7 @@ it('interrupts revoked-session uploads and never carries them into the next acco
       })
     throw new Error(`Unexpected request: ${path}`)
   })
-  const { page } = await open()
+  const { page, router } = await open(`/dossiers/${folderId}?nom=Dossier+privé+Alice`)
   await chooseFile(page)
   expect(page.get('aside').text()).toContain('preuve.txt')
   revoked = true
@@ -441,5 +444,7 @@ it('interrupts revoked-session uploads and never carries them into the next acco
   await flushPromises()
   expect(page.text()).toContain('Bob')
   expect(page.text()).not.toContain('preuve.txt')
+  expect(page.text()).not.toContain('Dossier privé Alice')
+  expect(router.currentRoute.value.path).toBe('/')
   expect(page.find('aside').exists()).toBe(false)
 })

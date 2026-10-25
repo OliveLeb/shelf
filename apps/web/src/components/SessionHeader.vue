@@ -30,6 +30,12 @@ function leave() {
         <span class="max-w-32 truncate text-sm text-muted sm:max-w-64">{{
           session.account?.username
         }}</span>
+        <a
+          v-if="transfers.items.length"
+          href="#transfers"
+          class="text-sm text-primary underline underline-offset-4"
+          >Transferts ({{ transfers.items.length }})</a
+        >
         <UButton color="neutral" variant="outline" size="sm" @click="logout"
           >Se déconnecter</UButton
         >

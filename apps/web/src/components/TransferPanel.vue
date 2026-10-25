@@ -22,8 +22,9 @@ const bytes = new Intl.NumberFormat('fr-FR', {
 <template>
   <aside
     v-if="transfers.items.length"
+    id="transfers"
     aria-label="Suivi des transferts"
-    class="sticky bottom-0 z-10 border-t border-default bg-default shadow-lg"
+    class="border-t border-default bg-default"
   >
     <div class="mx-auto max-w-5xl px-5 py-4 sm:px-8">
       <div class="flex flex-wrap items-center justify-between gap-3">
@@ -66,17 +67,25 @@ const bytes = new Intl.NumberFormat('fr-FR', {
             >
           </div>
           <p class="break-words text-xs text-muted">Destination : {{ item.destination.label }}</p>
-          <UProgress
+          <div
             v-if="
               item.status === 'uploading' ||
               item.status === 'declaring' ||
               item.status === 'finalizing'
             "
-            :model-value="item.status === 'uploading' ? item.loaded : null"
-            :max="Math.max(item.size, 1)"
-            v-bind="{ 'aria-label': `Envoi de ${item.name}` }"
-            size="sm"
-          />
+            role="progressbar"
+            :aria-label="`Envoi de ${item.name}`"
+            :aria-valuenow="item.status === 'uploading' ? item.loaded : undefined"
+            :aria-valuemin="0"
+            :aria-valuemax="Math.max(item.size, 1)"
+          >
+            <UProgress
+              :model-value="item.status === 'uploading' ? item.loaded : null"
+              :max="Math.max(item.size, 1)"
+              v-bind="{ 'aria-hidden': true }"
+              size="sm"
+            />
+          </div>
           <p v-if="item.status === 'uploading'" class="text-xs text-muted">
             {{ bytes.format(item.loaded) }} / {{ bytes.format(item.size) }}
           </p>

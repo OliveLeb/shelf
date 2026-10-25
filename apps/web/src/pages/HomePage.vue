@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, shallowRef, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
+import { ApiError } from '../api'
 import { useSession } from '../stores/session'
 import { useTransfers } from '../stores/transfers'
 
@@ -15,18 +16,21 @@ interface Element {
 const session = useSession()
 const transfers = useTransfers()
 const route = useRoute()
+const router = useRouter()
+const loading = shallowRef(true)
+const error = shallowRef(false)
 const parentId = computed(() =>
   typeof route.params.folderId === 'string' ? route.params.folderId : null,
 )
 const folderName = computed(() =>
-  typeof route.query.nom === 'string' ? route.query.nom : 'Dossier',
+  !loading.value && !error.value && typeof route.query.nom === 'string'
+    ? route.query.nom
+    : 'Dossier',
 )
 const destinationLabel = computed(() =>
   parentId.value ? `Espace personnel / ${folderName.value}` : 'Espace personnel',
 )
 const elements = shallowRef<Element[]>([])
-const loading = shallowRef(true)
-const error = shallowRef(false)
 let controller: AbortController | undefined
 const date = new Intl.DateTimeFormat('fr-FR', { dateStyle: 'medium' })
 const size = new Intl.NumberFormat('fr-FR', {
@@ -51,8 +55,18 @@ async function load() {
       },
     )
     if (!current.signal.aborted) elements.value = result
-  } catch {
-    if (!current.signal.aborted) error.value = true
+  } catch (cause) {
+    if (!current.signal.aborted) {
+      error.value = true
+      // A previous account's folder URL is not an authorized destination for
+      // the next account. Do not display its old label or keep that URL.
+      if (
+        parentId.value &&
+        cause instanceof ApiError &&
+        (cause.status === 403 || cause.status === 404)
+      )
+        await router.replace('/')
+    }
   } finally {
     if (!current.signal.aborted) loading.value = false
   }
