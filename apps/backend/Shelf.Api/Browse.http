@@ -1,0 +1,28 @@
+@baseUrl = http://localhost:5050
+@token = replace-with-a-session-token
+@folderId = 5d102f30-9dc8-4d2d-bf20-387079b5728b
+@elementId = 36d95f81-d93e-45ed-a952-45e4a2091324
+
+### Personal root: context and immediate children, folders first
+GET {{baseUrl}}/spaces/personal/browse
+Authorization: Bearer {{token}}
+
+### An owned personal folder; replace folderId with an existing folder
+GET {{baseUrl}}/spaces/personal/browse?folderId={{folderId}}&sort=addedAt&order=desc
+Authorization: Bearer {{token}}
+
+### Common root
+GET {{baseUrl}}/spaces/common/browse?sort=size&order=asc
+Authorization: Bearer {{token}}
+
+### Direct details and authorized path for a readable file or folder
+GET {{baseUrl}}/elements/{{elementId}}/context
+Authorization: Bearer {{token}}
+
+### Missing or inaccessible elements return 404 without revealing ancestors
+GET {{baseUrl}}/elements/00000000-0000-0000-0000-000000000000/context
+Authorization: Bearer {{token}}
+
+### Shared is a context space kind, not a browse route space (400 invalid_space)
+GET {{baseUrl}}/spaces/shared/browse
+Authorization: Bearer {{token}}

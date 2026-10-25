@@ -19,8 +19,8 @@ export function destination(router: Router, value: unknown) {
   )
     return '/'
   const route = router.resolve(value)
-  // Only the personal root is delivered here. Unknown or unauthorized routes cannot be resumed.
-  return route.name === 'personal' ? route.fullPath : '/'
+  // These routes still resolve their destination against the authorized server context.
+  return route.name === 'personal' || route.name === 'folder' ? route.fullPath : '/'
 }
 
 export function sessionRedirect(
@@ -39,6 +39,12 @@ export function makeRouter(pinia: Pinia, history: RouterHistory = createWebHisto
     history,
     routes: [
       { path: '/', name: 'personal', component: HomePage, meta: { protected: true } },
+      {
+        path: '/dossiers/:folderId',
+        name: 'folder',
+        component: HomePage,
+        meta: { protected: true },
+      },
       { path: '/connexion', name: 'login', component: LoginPage },
       { path: '/:pathMatch(.*)*', redirect: '/' },
     ],

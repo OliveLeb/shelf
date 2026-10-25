@@ -196,11 +196,17 @@ public sealed class FolderTests : TestInstance
         Assert.Equal("b.jpg", content.Content.Headers.ContentDisposition?.FileNameStar);
     }
 
-    [Fact]
-    public async Task Folder_content_sorts_by_name_date_added_or_size_with_folders_first()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Folder_content_sorts_by_name_date_added_or_size_with_folders_first(bool browse)
     {
         var (_, member) = await User();
         var folder = Id(await CreateFolder(member, "Sorted"));
+        async Task<JsonElement[]> SortedContent(string query = "") => browse
+            ? [.. (await Json(await member.GetAsync($"/spaces/personal/browse?folderId={folder}{query.Replace('?', '&')}")))
+                .GetProperty("entries").EnumerateArray().Select(entry => entry.GetProperty("element"))]
+            : await Content(member, folder, query);
         await CreateFolder(member, "z", folder);
         foreach (var (name, size) in new[] { ("B.txt", 30), ("a.txt", 10), ("c.txt", 20) })
         {
@@ -210,12 +216,12 @@ public sealed class FolderTests : TestInstance
         Clock.Advance(TimeSpan.FromMinutes(1));
         await CreateFolder(member, "Y", folder);
 
-        Assert.Equal(["Y", "z", "a.txt", "B.txt", "c.txt"], Names(await Content(member, folder)));
-        Assert.Equal(["z", "Y", "c.txt", "B.txt", "a.txt"], Names(await Content(member, folder, "?sort=name&order=desc")));
-        Assert.Equal(["z", "Y", "B.txt", "a.txt", "c.txt"], Names(await Content(member, folder, "?sort=addedAt")));
-        Assert.Equal(["Y", "z", "c.txt", "a.txt", "B.txt"], Names(await Content(member, folder, "?sort=addedAt&order=desc")));
-        Assert.Equal(["Y", "z", "a.txt", "c.txt", "B.txt"], Names(await Content(member, folder, "?sort=size")));
-        Assert.Equal(["Y", "z", "B.txt", "c.txt", "a.txt"], Names(await Content(member, folder, "?sort=size&order=desc")));
+        Assert.Equal(["Y", "z", "a.txt", "B.txt", "c.txt"], Names(await SortedContent()));
+        Assert.Equal(["z", "Y", "c.txt", "B.txt", "a.txt"], Names(await SortedContent("?sort=name&order=desc")));
+        Assert.Equal(["z", "Y", "B.txt", "a.txt", "c.txt"], Names(await SortedContent("?sort=addedAt")));
+        Assert.Equal(["Y", "z", "c.txt", "a.txt", "B.txt"], Names(await SortedContent("?sort=addedAt&order=desc")));
+        Assert.Equal(["Y", "z", "a.txt", "c.txt", "B.txt"], Names(await SortedContent("?sort=size")));
+        Assert.Equal(["Y", "z", "B.txt", "c.txt", "a.txt"], Names(await SortedContent("?sort=size&order=desc")));
         Assert.Equal(["Sorted"], Names([.. (await Json(await member.GetAsync("/spaces/personal/elements?sort=size&order=desc"))).EnumerateArray()]));
         Assert.Equal("invalid_sort", await Error(await member.GetAsync($"/folders/{folder}/elements?sort=type")));
         Assert.Equal("invalid_order", await Error(await member.GetAsync($"/folders/{folder}/elements?order=up")));

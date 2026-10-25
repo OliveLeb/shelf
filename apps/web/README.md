@@ -1,9 +1,27 @@
 # Application web
 
 Vue 3, Vue Router et Nuxt UI (plugin Vite, sans Nuxt), thème et composants
-partagés fournis par `@shelf/ui`. Connexion persistante et liste de la racine
-de l’espace personnel ; la navigation dans les dossiers et les transferts
-seront ajoutés séparément.
+partagés fournis par `@shelf/ui`. Connexion persistante, navigation dans
+l’espace personnel et téléchargement direct S3. L’envoi et les commandes
+d’organisation seront ajoutés séparément.
+
+Les dossiers ont une URL `/dossiers/{id}`. Les paramètres `tri` (`name`,
+`addedAt`, `size`), `ordre` (`asc`, `desc`) et `filtre` sont restaurés au
+rechargement ; `fichier` ouvre les informations d’un fichier. Le filtre porte
+uniquement sur les noms du dossier courant, sans recherche récursive. La liste
+et le fil d’Ariane proviennent de `/spaces/personal/browse`, les informations
+et capacités du fichier de `/elements/{id}/context`. Aucun historique de
+navigation n’est nécessaire pour ouvrir un dossier directement.
+
+La sélection reste locale ; changer de dossier, trier, filtrer ou actualiser
+l’efface. Une sélection unique permet de consulter un fichier ou d’ouvrir un
+dossier ; aucun téléchargement groupé ou ZIP n’est proposé. Chaque clic sur
+Télécharger demande une nouvelle URL signée, sans conserver ce lien dans
+l’état de l’application. Le navigateur télécharge directement depuis S3,
+avec le nom fourni par `Content-Disposition`, sans relais des octets par l’API.
+Le stockage doit être joignable depuis le navigateur sur une origine dédiée
+(HTTPS en production). En local, utiliser par exemple `127.0.0.1:9000` pour
+MinIO et `localhost:3000` pour le web : les cookies ne sont pas isolés par port.
 
 Depuis la racine du dépôt :
 

@@ -26,6 +26,13 @@ const folder = {
   addedAt: '2026-10-24T12:00:00Z',
 }
 
+function browse(elements: (typeof folder)[] = []) {
+  return Response.json({
+    context: { space: { kind: 'personal' }, element: null, ancestors: [] },
+    entries: elements.map((element) => ({ element, capabilities: {} })),
+  })
+}
+
 async function open(path = '/') {
   const pinia = createPinia()
   const router = makeRouter(pinia, createMemoryHistory())
@@ -42,7 +49,7 @@ it('verifies the server session at startup and removes private content when a re
     vi.fn(async (path: string) => {
       if (path === '/api/account')
         return revoked ? new Response('', { status: 401 }) : Response.json(alice)
-      if (path === '/api/spaces/personal/elements') return Response.json([folder])
+      if (path.startsWith('/api/spaces/personal/browse?')) return browse([folder])
       throw new Error(`Unexpected request: ${path}`)
     }),
   )
@@ -70,8 +77,8 @@ it('does not restore a late private response after logout or reuse it for the ne
       }
       if (path === '/api/auth/web/login')
         return Response.json({ ...alice, id: 'bob', username: 'Bob' })
-      if (path === '/api/spaces/personal/elements') {
-        if (signedOut) return Response.json([])
+      if (path.startsWith('/api/spaces/personal/browse?')) {
+        if (signedOut) return browse()
         return new Promise<Response>((resolve) => {
           pendingRoot = resolve
         })
@@ -87,7 +94,7 @@ it('does not restore a late private response after logout or reuse it for the ne
   await page.get('input[name="password"]').setValue('another-account-password')
   await page.get('form').trigger('submit')
   await flushPromises()
-  pendingRoot!(Response.json([folder]))
+  pendingRoot!(browse([folder]))
   await flushPromises()
   expect(page.text()).toContain('Bob')
   expect(page.text()).toContain('Votre espace est encore vide')
@@ -148,8 +155,8 @@ it('rechecks identity when another tab logs in between account verification and 
       cookie = bob
       return Response.json(bob)
     }
-    if (path === '/api/spaces/personal/elements')
-      return Response.json([{ ...folder, name: `Dossier privé ${cookie.username}` }])
+    if (path.startsWith('/api/spaces/personal/browse?'))
+      return browse([{ ...folder, name: `Dossier privé ${cookie.username}` }])
     throw new Error(`Unexpected request: ${path}`)
   })
   const opening = open()
@@ -177,7 +184,7 @@ it('clears private content on a cross-tab logout and ignores an old verification
         release = () => resolve(Response.json(alice))
       })
     }
-    if (path === '/api/spaces/personal/elements') return Response.json([folder])
+    if (path.startsWith('/api/spaces/personal/browse?')) return browse([folder])
     throw new Error(`Unexpected request: ${path}`)
   })
   const { page, router } = await open()
@@ -228,7 +235,7 @@ it.each(['http', 'network'])(
     let failed = false
     vi.stubGlobal('fetch', async (path: string) => {
       if (path === '/api/account') return Response.json(alice)
-      if (path === '/api/spaces/personal/elements') return Response.json([folder])
+      if (path.startsWith('/api/spaces/personal/browse?')) return browse([folder])
       if (path === '/api/auth/logout') {
         if (failed) return new Response(null, { status: 204 })
         failed = true
@@ -254,6 +261,10 @@ it.each(['http', 'network'])(
 
 it.each([
   ['/?vue=liste#contenu', '/?vue=liste#contenu'],
+  [
+    '/dossiers/nested?tri=size&ordre=desc&filtre=été',
+    '/dossiers/nested?tri=size&ordre=desc&filtre=%C3%A9t%C3%A9',
+  ],
   ['https://evil.example/', '/'],
   ['//evil.example/', '/'],
   ['/\\evil.example/', '/'],
@@ -263,7 +274,7 @@ it.each([
     'fetch',
     vi.fn(async (path: string) => {
       if (path === '/api/account') return Response.json(alice)
-      if (path === '/api/spaces/personal/elements') return Response.json([])
+      if (path.startsWith('/api/spaces/personal/browse?')) return browse()
       throw new Error(`Unexpected request: ${path}`)
     }),
   )

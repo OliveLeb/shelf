@@ -32,16 +32,20 @@ public sealed partial class StorageTransaction
 
     private async Task RequireMutableSubtree(Account account, Guid id, ElementAccess access)
     {
-        if (!access.CanWrite || !access.CanManage) throw new StorageError(403, "write_forbidden");
-        if (access.Owner is null || access.Owner == account.Id) return;
+        if (!await MutableSubtree(account, id, access)) throw new StorageError(403, "write_forbidden");
+    }
+
+    private async Task<bool> MutableSubtree(Account account, Guid id, ElementAccess access)
+    {
+        if (!access.CanWrite || !access.CanManage) return false;
+        if (access.Owner is null || access.Owner == account.Id) return true;
         // A container operation also moves or deletes its descendants, including any protected roots.
-        if (await Scalar("""
+        return await Scalar("""
             WITH RECURSIVE subtree(id) AS (
                 SELECT id FROM elements WHERE id=$1
                 UNION ALL SELECT e.id FROM elements e JOIN subtree p ON e.parent_id=p.id)
             SELECT 1 FROM shares WHERE element_id IN (SELECT id FROM subtree) LIMIT 1
-            """, id) is not null)
-            throw new StorageError(403, "write_forbidden");
+            """, id) is null;
     }
 
     private async Task RequireOwner(Account account, Guid id)
